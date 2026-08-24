@@ -1,0 +1,13 @@
+.DS_Store
+.env
+node_modules/
+dist/
+coverage/
+tmp/
+
+frontend/node_modules/
+frontend/dist/
+backend/bin/
+backend/.gocache/
+backend/.gomodcache/
+backend/.gopath/
