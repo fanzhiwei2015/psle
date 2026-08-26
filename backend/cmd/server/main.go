@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/bytedance/psle/backend/internal/question"
+	"github.com/bytedance/psle/backend/internal/settings"
+	"github.com/bytedance/psle/backend/internal/upload"
 )
 
 func main() {
@@ -27,8 +30,17 @@ func main() {
 		log.Fatalf("ping db: %v", err)
 	}
 
+	settingsRepo := settings.NewRepository(db)
+	if err := settingsRepo.EnsureSchema(context.Background()); err != nil {
+		log.Fatalf("ensure settings schema: %v", err)
+	}
+	questionRepo := question.NewRepository(db)
+	if err := questionRepo.EnsureSchema(context.Background()); err != nil {
+		log.Fatalf("ensure question schema: %v", err)
+	}
+
 	mux := http.NewServeMux()
-	registerRoutes(mux, db)
+	registerRoutes(mux, questionRepo, settingsRepo)
 
 	server := &http.Server{
 		Addr:              ":" + getEnv("APP_PORT", "8080"),
@@ -55,9 +67,11 @@ func main() {
 	}
 }
 
-func registerRoutes(mux *http.ServeMux, db *sql.DB) {
-	handler := question.NewHandler(question.NewRepository(db))
+func registerRoutes(mux *http.ServeMux, questionRepo *question.Repository, settingsRepo *settings.Repository) {
+	handler := question.NewHandler(questionRepo)
 	handler.Register(mux)
+	upload.NewHandler(getUploadRoot()).Register(mux)
+	settings.NewHandler(settingsRepo).Register(mux)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -91,6 +105,10 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getUploadRoot() string {
+	return getEnv("UPLOAD_ROOT", filepath.Join(".", "uploads"))
 }
 
 func withCORS(next http.Handler) http.Handler {
