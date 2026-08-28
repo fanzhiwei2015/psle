@@ -292,19 +292,45 @@ func decodeInput(w http.ResponseWriter, r *http.Request) (SaveQuestionInput, boo
 	}
 	if input.QuestionType == "english_single_choice" {
 		if input.Title == "" {
-			input.Title = buildManualTitle(input.Stem)
+			input.Title = buildManualTitle(input.QuestionType, input.Stem)
 		}
 	}
-	if input.QuestionType == "english_essay" {
+	if input.QuestionType == "english_common_sentence" {
 		if input.Title == "" {
-			input.Title = buildManualTitle(input.Stem)
+			input.Title = buildManualTitle(input.QuestionType, input.Stem)
+		}
+		if input.Answer == "" {
+			input.Answer = input.Stem
+		}
+	}
+	if input.QuestionType == "english_synthesis" {
+		if input.Title == "" {
+			input.Title = buildManualTitle(input.QuestionType, input.Stem)
+		}
+		if input.Answer == "" {
+			input.Answer = stripHTML(input.Stem)
+		}
+	}
+	if input.QuestionType == "english_essay" || input.QuestionType == "english_comprehension_close" {
+		if input.Title == "" {
+			input.Title = buildManualTitle(input.QuestionType, input.Stem)
 		}
 	}
 	if input.Code == "" && input.Subject != "" {
 		input.Code = buildManualCode(input.Subject, input.QuestionType, time.Now())
 	}
 
-	if input.QuestionType == "english_essay" {
+	if input.QuestionType == "english_common_sentence" {
+		if input.Title == "" || input.Subject == "" || input.Stem == "" {
+			writeError(w, http.StatusBadRequest, "title, subject and stem are required")
+			return SaveQuestionInput{}, false
+		}
+	} else if input.QuestionType == "english_synthesis" {
+		if input.Title == "" || input.Subject == "" || input.ExampleSentence == "" || input.Stem == "" || input.Answer == "" {
+			writeError(w, http.StatusBadRequest, "title, subject, exampleSentence, stem and answer are required")
+			return SaveQuestionInput{}, false
+		}
+	} else if input.QuestionType == "english_essay" || input.QuestionType == "english_comprehension_close" {
 		if input.Title == "" || input.Subject == "" || input.Stem == "" || input.Answer == "" {
 			writeError(w, http.StatusBadRequest, "title, subject, stem and answer are required")
 			return SaveQuestionInput{}, false
@@ -331,14 +357,35 @@ func decodeInput(w http.ResponseWriter, r *http.Request) (SaveQuestionInput, boo
 			return SaveQuestionInput{}, false
 		}
 	}
+	if input.QuestionType == "english_comprehension_close" && input.Subject != "English" {
+		writeError(w, http.StatusBadRequest, "english_comprehension_close only supports English subject")
+		return SaveQuestionInput{}, false
+	}
+	if input.QuestionType == "english_common_sentence" && input.Subject != "English" {
+		writeError(w, http.StatusBadRequest, "english_common_sentence only supports English subject")
+		return SaveQuestionInput{}, false
+	}
+	if input.QuestionType == "english_synthesis" && input.Subject != "English" {
+		writeError(w, http.StatusBadRequest, "english_synthesis only supports English subject")
+		return SaveQuestionInput{}, false
+	}
 
 	return input, true
 }
 
-func buildManualTitle(stem string) string {
+func buildManualTitle(questionType, stem string) string {
 	plain := strings.TrimSpace(stripHTML(stem))
 	if plain == "" {
-		return "英文作文"
+		if questionType == "english_comprehension_close" {
+			return "Comprehension Close"
+		}
+		if questionType == "english_synthesis" {
+			return "Synthesis"
+		}
+		if questionType == "english_common_sentence" {
+			return "Common Sentence"
+		}
+		return "English Essay"
 	}
 
 	runes := []rune(plain)
@@ -439,7 +486,7 @@ func normalizeImportItem(item map[string]any, defaultSubject string) (ImportQues
 	questionType := normalizeQuestionType(getString(item, "题型", "questionType", "type"))
 	topic := strings.TrimSpace(getString(item, "topic", "Topic", "知识点", "课本知识点"))
 	reminderWord := strings.TrimSpace(getString(item, "单词", "word", "reminderWord"))
-	exampleSentence := strings.TrimSpace(getString(item, "例句", "sentence", "exampleSentence"))
+	exampleSentence := strings.TrimSpace(getString(item, "原句", "originalSentence", "sourceSentence", "例句", "sentence", "exampleSentence"))
 	optionItems := parseOptionItems(item)
 	problemDesc := strings.TrimSpace(getString(item, "问题描述", "题目", "problemDescription", "stem"))
 	answer := strings.TrimSpace(getString(item, "答案", "answer"))
@@ -465,10 +512,22 @@ func normalizeImportItem(item map[string]any, defaultSubject string) (ImportQues
 		// valid
 	} else if questionType == "english_single_choice" && subject == "English" {
 		// valid
+	} else if questionType == "english_comprehension_close" && subject == "English" {
+		// valid
+	} else if questionType == "english_synthesis" && subject == "English" {
+		// valid
+	} else if questionType == "english_common_sentence" && subject == "English" {
+		// valid
 	} else if questionType == "english_word_reminder" {
 		errs = append(errs, "英文单词提醒只支持英文学科")
 	} else if questionType == "english_single_choice" {
 		errs = append(errs, "英文选择题只支持英文学科")
+	} else if questionType == "english_comprehension_close" {
+		errs = append(errs, "Comprehension Close 只支持英文学科")
+	} else if questionType == "english_synthesis" {
+		errs = append(errs, "Synthesis 只支持英文学科")
+	} else if questionType == "english_common_sentence" {
+		errs = append(errs, "常用句子只支持英文学科")
 	}
 	if topic == "" {
 		errs = append(errs, "缺少 topic（知识点）")
@@ -479,6 +538,9 @@ func normalizeImportItem(item map[string]any, defaultSubject string) (ImportQues
 	if questionType == "english_word_reminder" && exampleSentence == "" {
 		errs = append(errs, "缺少例句")
 	}
+	if questionType == "english_synthesis" && exampleSentence == "" {
+		errs = append(errs, "缺少 originalSentence（原句）")
+	}
 	if questionType == "english_single_choice" && len(optionItems) < 2 {
 		errs = append(errs, "英文选择题至少需要 2 个选项")
 	}
@@ -487,6 +549,12 @@ func normalizeImportItem(item map[string]any, defaultSubject string) (ImportQues
 	}
 	if problemDesc == "" {
 		errs = append(errs, "缺少问题描述")
+	}
+	if questionType == "english_common_sentence" && answer == "" {
+		answer = problemDesc
+	}
+	if questionType == "english_synthesis" && answer == "" {
+		answer = stripHTML(problemDesc)
 	}
 	if answer == "" {
 		errs = append(errs, "缺少答案")
@@ -580,6 +648,12 @@ func normalizeQuestionType(raw string) string {
 		return "essay"
 	case "english_essay", "english essay", "英文作文", "英语作文":
 		return "english_essay"
+	case "english_comprehension_close", "english comprehension close", "comprehension close", "英文完形填空", "英语完形填空", "英文 comprehension close":
+		return "english_comprehension_close"
+	case "english_synthesis", "english synthesis", "synthesis", "句型转换", "英文句型转换", "英语句型转换":
+		return "english_synthesis"
+	case "english_common_sentence", "english common sentence", "common sentence", "common sentences", "英文常用句子", "英语常用句子", "常用句子":
+		return "english_common_sentence"
 	case "english_word_reminder", "english word reminder", "word reminder", "英文单词提醒", "单词提醒", "英文单词":
 		return "english_word_reminder"
 	case "english_single_choice", "english choice", "english single choice", "英文选择题", "英语选择题":

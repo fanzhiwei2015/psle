@@ -482,6 +482,10 @@ th {
   width: min(760px, 100%);
 }
 
+.practice-modal {
+  width: min(1120px, 96vw);
+}
+
 .essay-modal {
   width: min(1180px, 96vw);
 }
@@ -511,11 +515,19 @@ th {
   gap: 12px;
 }
 
+.essay-form-full-span {
+  grid-column: 1 / -1;
+}
+
 .essay-editor-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr);
   gap: 18px;
   align-items: start;
+}
+
+.essay-editor-layout.single-pane {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .essay-editor-pane,
@@ -644,9 +656,64 @@ th {
   gap: 10px;
 }
 
+.essay-answer-item-inline.has-feedback {
+  grid-template-columns: 28px minmax(0, 1fr) minmax(120px, 180px);
+}
+
 .essay-answer-item span {
   color: #475569;
   font-size: 13px;
+}
+
+.essay-answer-index-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.essay-answer-reveal-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid #dbe5f0;
+  background: #ffffff;
+  color: #64748b;
+}
+
+.essay-answer-reveal-button:hover {
+  color: #2563eb;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.essay-answer-reveal-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.essay-answer-inline-correct {
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.essay-answer-inline-hint {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.essay-answer-item-inline.has-feedback input {
+  border-color: #fca5a5;
+  background: #fff7f7;
 }
 
 .import-actions {
@@ -719,9 +786,24 @@ th {
 
 .practice-essay-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(220px, 320px);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 360px);
+  gap: 22px;
   align-items: start;
+}
+
+.practice-reading-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.practice-essay-content {
+  display: grid;
+  gap: 10px;
+}
+
+.practice-essay-toolbar {
+  margin-bottom: 0;
 }
 
 .practice-essay-layout .practice-stem {
@@ -733,6 +815,88 @@ th {
   border-radius: 14px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
+}
+
+.practice-synthesis-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.practice-synthesis-block {
+  display: grid;
+  gap: 8px;
+}
+
+.practice-synthesis-label {
+  color: #334155;
+}
+
+.practice-synthesis-answer-field {
+  gap: 10px;
+}
+
+.practice-synthesis-answer-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.practice-synthesis-textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.synthesis-mask-token {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 78px;
+  padding: 2px 10px;
+  margin: 0 3px;
+  border-radius: 10px;
+  border: 1px dashed #60a5fa;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.word-reminder-answer-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.word-reminder-answer-input {
+  width: 100%;
+}
+
+.word-reminder-answer-input.correct {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.word-reminder-answer-input.wrong {
+  border-color: #fca5a5;
+  background: #fff7f7;
+}
+
+.word-reminder-feedback {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.word-reminder-feedback.correct {
+  color: #15803d;
+}
+
+.word-reminder-feedback.wrong {
+  color: #b91c1c;
 }
 
 .choice-options {
@@ -922,6 +1086,20 @@ tr.reading-row .question-summary-cell strong {
   .essay-form-grid,
   .essay-editor-layout,
   .practice-essay-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .essay-answer-item-inline.has-feedback {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .essay-answer-item-inline.has-feedback .essay-answer-inline-correct {
+    grid-column: 2;
+  }
+
+  .word-reminder-answer-row {
     grid-template-columns: 1fr;
   }
 }

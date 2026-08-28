@@ -276,7 +276,7 @@ func (r *Repository) Import(ctx context.Context, inputs []ImportQuestionInput) (
 			Tags:            nil,
 			ReminderWord:    input.ReminderWord,
 			ExampleSentence: input.ExampleSentence,
-				OptionItems:     input.OptionItems,
+			OptionItems:     input.OptionItems,
 			Stem:            input.ProblemDesc,
 			Answer:          input.Answer,
 			Analysis:        "通过 JSON 导入创建",
@@ -709,6 +709,25 @@ func evaluateAttempt(questionType, answer, stem, answerText string) (bool, *bool
 			return true, boolPtr(true), "单词填写正确。", answer
 		}
 		return true, boolPtr(false), "单词填写已记录，正确答案已显示。", answer
+	case "english_synthesis":
+		expected := parseUnderlinedAnswerValues(stem)
+		if len(expected) == 0 {
+			expected = parseEssayAnswerValues(answer)
+		}
+		correctAnswer := formatEssayAnswerValues(expected)
+		if len(expected) == 0 {
+			return false, nil, "这道 Synthesis 题还没有配置空白部分，已保留作答记录。", correctAnswer
+		}
+		submitted := parseEssayAnswerValues(answerText)
+		if len(submitted) != len(expected) {
+			return true, boolPtr(false), "Synthesis 填写数量不完整，正确答案已显示。", correctAnswer
+		}
+		for index := range expected {
+			if normalizeComparableAnswer(expected[index]) != normalizeComparableAnswer(submitted[index]) {
+				return true, boolPtr(false), "Synthesis 填写有误，正确答案已显示。", correctAnswer
+			}
+		}
+		return true, boolPtr(true), "Synthesis 填写正确。", correctAnswer
 	case "english_essay":
 		expected := parseEssayAnswerValues(answer)
 		correctAnswer := formatEssayAnswerValues(expected)
@@ -725,6 +744,24 @@ func evaluateAttempt(questionType, answer, stem, answerText string) (bool, *bool
 			}
 		}
 		return true, boolPtr(true), "挖空单词填写正确。", correctAnswer
+	case "english_comprehension_close":
+		expected := parseEssayAnswerValues(answer)
+		correctAnswer := formatEssayAnswerValues(expected)
+		if len(expected) == 0 {
+			return false, nil, "这道 Comprehension Close 还没有配置挖空单词，已保留作答记录。", correctAnswer
+		}
+		submitted := parseEssayAnswerValues(answerText)
+		if len(submitted) != len(expected) {
+			return true, boolPtr(false), "Comprehension Close 填写数量不完整，正确答案已显示。", correctAnswer
+		}
+		for index := range expected {
+			if normalizeComparableAnswer(expected[index]) != normalizeComparableAnswer(submitted[index]) {
+				return true, boolPtr(false), "Comprehension Close 填写有误，正确答案已显示。", correctAnswer
+			}
+		}
+		return true, boolPtr(true), "Comprehension Close 填写正确。", correctAnswer
+	case "english_common_sentence":
+		return false, nil, "This Common Sentence item is for reading only and does not require answer submission.", ""
 	default:
 		return false, nil, "回答已提交；开放题暂不自动批改，直接展示参考答案。", answer
 	}
@@ -800,6 +837,27 @@ func parseEssayAnswerValues(raw string) []string {
 	return parsed
 }
 
+func parseUnderlinedAnswerValues(raw string) []string {
+	matches := regexp.MustCompile(`(?is)<u[^>]*>(.*?)</u>`).FindAllStringSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	stripTags := regexp.MustCompile(`(?is)<[^>]+>`)
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		value := strings.TrimSpace(stripTags.ReplaceAllString(match[1], ""))
+		if value == "" {
+			continue
+		}
+		values = append(values, strings.ToLower(value))
+	}
+	return values
+}
+
 func formatEssayAnswerValues(values []string) string {
 	if len(values) == 0 {
 		return ""
@@ -841,12 +899,18 @@ func buildManualCode(subject, questionType string, currentTime time.Time) string
 	switch strings.TrimSpace(questionType) {
 	case "english_essay":
 		typePrefix = "ESSAY"
+	case "english_synthesis":
+		typePrefix = "SYN"
+	case "english_common_sentence":
+		typePrefix = "CS"
 	case "essay":
 		typePrefix = "ESSAY"
 	case "english_word_reminder":
 		typePrefix = "WORD"
 	case "english_single_choice":
 		typePrefix = "ESC"
+	case "english_comprehension_close":
+		typePrefix = "CCLOSE"
 	case "single_choice":
 		typePrefix = "SC"
 	case "multiple_choice":
@@ -865,10 +929,19 @@ func buildImportTitle(questionType, stem string) string {
 	if strings.TrimSpace(questionType) == "english_single_choice" {
 		return "英文选择题"
 	}
+	if strings.TrimSpace(questionType) == "english_comprehension_close" {
+		return "Comprehension Close"
+	}
+	if strings.TrimSpace(questionType) == "english_synthesis" {
+		return "Synthesis"
+	}
+	if strings.TrimSpace(questionType) == "english_common_sentence" {
+		return "Common Sentence"
+	}
 
 	compact := strings.TrimSpace(stem)
 	if compact == "" {
-		return "JSON 导入题目"
+		return "Imported Question"
 	}
 
 	runes := []rune(compact)

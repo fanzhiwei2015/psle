@@ -121,24 +121,27 @@ type EssayWordStatsResponse = {
 const uploadLinksStorageKey = "psle-upload-links";
 
 const subjectTabs: SubjectMeta[] = [
-  { key: "english", label: "英文", value: "English", aliases: ["English"] },
-  { key: "science", label: "科学", value: "Science", aliases: ["Science"] },
+  { key: "english", label: "English", value: "English", aliases: ["English"] },
+  { key: "science", label: "Science", value: "Science", aliases: ["Science"] },
   { key: "chinese", label: "华文", value: "Chinese", aliases: ["Chinese"] },
-  { key: "math", label: "数学", value: "Mathematics", aliases: ["Mathematics"] }
+  { key: "math", label: "Mathematics", value: "Mathematics", aliases: ["Mathematics"] }
 ];
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
 const questionTypeLabels: Record<string, string> = {
-  single_choice: "单选题",
-  multiple_choice: "多选题",
-  short_answer: "简答题",
-  fill_in_blank: "填空题",
-  true_false: "判断题",
-  essay: "作文题",
-  english_essay: "英文作文",
-  english_word_reminder: "英文单词提醒",
-  english_single_choice: "英文选择题"
+  single_choice: "Single Choice",
+  multiple_choice: "Multiple Choice",
+  short_answer: "Short Answer",
+  fill_in_blank: "Fill in the Blank",
+  true_false: "True / False",
+  essay: "Essay",
+  english_essay: "English Essay",
+  english_comprehension_close: "Comprehension Close",
+  english_synthesis: "Synthesis",
+  english_common_sentence: "Common Sentences",
+  english_word_reminder: "English Word Reminder",
+  english_single_choice: "English Single Choice"
 };
 
 const essaySpeechRateOptions = [1, 1.25, 1.5] as const;
@@ -239,11 +242,56 @@ function isEnglishSingleChoiceQuestion(value: string) {
 }
 
 function isRichTextQuestionType(value: string) {
-  return value === "essay" || value === "english_essay";
+  return value === "essay" || value === "english_essay" || value === "english_comprehension_close" || value === "english_common_sentence";
 }
 
 function isEnglishEssayQuestion(value: string) {
   return value === "english_essay";
+}
+
+function isEnglishComprehensionCloseQuestion(value: string) {
+  return value === "english_comprehension_close";
+}
+
+function isEnglishSynthesisQuestion(value: string) {
+  return value === "english_synthesis";
+}
+
+function isEnglishCommonSentenceQuestion(value: string) {
+  return value === "english_common_sentence";
+}
+
+function isEnglishPassageEditorQuestion(value: string) {
+  return isEnglishEssayQuestion(value) || isEnglishComprehensionCloseQuestion(value) || isEnglishSynthesisQuestion(value) || isEnglishCommonSentenceQuestion(value);
+}
+
+function isEnglishBlankPassageQuestion(value: string) {
+  return isEnglishEssayQuestion(value) || isEnglishComprehensionCloseQuestion(value);
+}
+
+function isEnglishBlankCompletionQuestion(value: string) {
+  return isEnglishBlankPassageQuestion(value) || isEnglishSynthesisQuestion(value);
+}
+
+function isEnglishReadingQuestion(value: string) {
+  return isEnglishBlankPassageQuestion(value) || isEnglishCommonSentenceQuestion(value);
+}
+
+function getEnglishPassageEntryLabel(value: string) {
+  if (isEnglishCommonSentenceQuestion(value)) {
+    return "Common Sentences";
+  }
+  return isEnglishComprehensionCloseQuestion(value) ? "Comprehension Close" : "Essay Library";
+}
+
+function getEnglishPassageEditorLabel(value: string) {
+  if (isEnglishCommonSentenceQuestion(value)) {
+    return "Common Sentence";
+  }
+  if (isEnglishSynthesisQuestion(value)) {
+    return "Synthesis";
+  }
+  return isEnglishComprehensionCloseQuestion(value) ? "Comprehension Close" : "English Essay";
 }
 
 function sanitizeRichHtml(raw: string) {
@@ -400,14 +448,36 @@ function pickEnglishSpeechVoice(voices: SpeechSynthesisVoice[], preferredVoice: 
     "google uk english male"
   ];
   const hints = preferredVoice === "female" ? femaleHints : maleHints;
+  const voiceText = (voice: SpeechSynthesisVoice) => `${voice.name} ${voice.voiceURI}`.toLowerCase();
+  const hasPreferredHint = (voice: SpeechSynthesisVoice) => hints.some((hint) => voiceText(voice).includes(hint));
+  const isGoogleOnlineVoice = (voice: SpeechSynthesisVoice) => {
+    const text = voiceText(voice);
+    return text.includes("google") && text.includes("online");
+  };
+  const isGoogleVoice = (voice: SpeechSynthesisVoice) => voiceText(voice).includes("google");
 
-  const matchedVoice =
-    englishVoices.find((voice) => {
-      const voiceText = `${voice.name} ${voice.voiceURI}`.toLowerCase();
-      return hints.some((hint) => voiceText.includes(hint));
-    }) ?? null;
+  const preferredGoogleOnlineVoice = englishVoices.find((voice) => isGoogleOnlineVoice(voice) && hasPreferredHint(voice)) ?? null;
+  if (preferredGoogleOnlineVoice) {
+    return preferredGoogleOnlineVoice;
+  }
 
-  return matchedVoice ?? englishVoices[0] ?? null;
+  const googleOnlineVoice = englishVoices.find((voice) => isGoogleOnlineVoice(voice)) ?? null;
+  if (googleOnlineVoice) {
+    return googleOnlineVoice;
+  }
+
+  const preferredGoogleVoice = englishVoices.find((voice) => isGoogleVoice(voice) && hasPreferredHint(voice)) ?? null;
+  if (preferredGoogleVoice) {
+    return preferredGoogleVoice;
+  }
+
+  const preferredVoiceMatch = englishVoices.find((voice) => hasPreferredHint(voice)) ?? null;
+  if (preferredVoiceMatch) {
+    return preferredVoiceMatch;
+  }
+
+  const googleVoice = englishVoices.find((voice) => isGoogleVoice(voice)) ?? null;
+  return googleVoice ?? englishVoices[0] ?? null;
 }
 
 function buildEnglishEssayExercise(rawHtml: string) {
@@ -438,6 +508,39 @@ function buildEnglishEssayExercise(rawHtml: string) {
   });
 
   return { html: container.innerHTML, answers };
+}
+
+function buildEnglishSynthesisExercise(rawHtml: string) {
+  const sanitized = sanitizeRichHtml(rawHtml);
+  if (!sanitized) {
+    return { html: "", answers: [] as string[] };
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${sanitized}</div>`, "text/html");
+  const container = doc.body.firstElementChild as HTMLDivElement | null;
+  if (!container) {
+    return { html: sanitized, answers: [] };
+  }
+
+  const answers: string[] = [];
+  const underlinedNodes = Array.from(container.querySelectorAll("u"));
+  underlinedNodes.forEach((node, index) => {
+    const value = (node.textContent ?? "").trim();
+    if (!value) {
+      return;
+    }
+    answers.push(value);
+    const marker = doc.createElement("span");
+    marker.className = "synthesis-mask-token";
+    marker.textContent = `Blank ${index + 1}`;
+    node.replaceWith(marker);
+  });
+
+  return {
+    html: container.innerHTML,
+    answers
+  };
 }
 
 function extractUnderlinedWords(rawHtml: string) {
@@ -475,6 +578,27 @@ function parseEssayCorrectAnswer(raw: string) {
     .filter(Boolean);
 }
 
+function parseEssayAnswerValues(raw: string) {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed) as string[];
+      return parsed.map((value) => String(value ?? "").trim());
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  return raw
+    .split("\n")
+    .map((line) => line.replace(/^\d+\.\s*/, "").trim())
+    .filter(Boolean);
+}
+
+function normalizeEssayAnswerValue(raw: string) {
+  return raw.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -498,7 +622,7 @@ function buildMaskedReminderSentence(question: Question) {
     return `${sentence.slice(0, index)}（    ）${sentence.slice(index + word.length)}`;
   }
 
-  return `${sentence}\n\n请根据题意填写对应英文单词。`;
+  return `${sentence}\n\nPlease fill in the matching English word.`;
 }
 
 function buildReminderHint(word: string) {
@@ -508,6 +632,17 @@ function buildReminderHint(word: string) {
   }
   if (trimmed.length === 2) {
     return `${trimmed[0]}${trimmed[1]}`;
+  }
+  return `${trimmed[0]}${"*".repeat(trimmed.length - 2)}${trimmed[trimmed.length - 1]}`;
+}
+
+function buildMaskedPassageHint(word: string) {
+  const trimmed = word.trim();
+  if (trimmed.length <= 1) {
+    return trimmed;
+  }
+  if (trimmed.length === 2) {
+    return `${trimmed[0]}*`;
   }
   return `${trimmed[0]}${"*".repeat(trimmed.length - 2)}${trimmed[trimmed.length - 1]}`;
 }
@@ -549,6 +684,26 @@ function getImportPlaceholder(subject: string) {
     ],
     "answer": "B",
     "childAnswer": ""
+  },
+  {
+    "questionType": "english_comprehension_close",
+    "topic": "halloween story",
+    "problemDescription": "<p>The old house looked <u>silent</u> at night, but a strange light was still shining through the broken window.</p>",
+    "answer": "[\"silent\"]",
+    "childAnswer": ""
+  },
+  {
+    "questionType": "english_synthesis",
+    "topic": "reported speech",
+    "exampleSentence": "The teacher said, \"You must finish the work today.\"",
+    "problemDescription": "<p>The teacher said that they <u>had</u> to finish the work that day.</p>",
+    "childAnswer": ""
+  },
+  {
+    "questionType": "english_common_sentence",
+    "topic": "descriptive writing",
+    "problemDescription": "<p>The golden light of sunset spilled across the quiet lake, turning every ripple into a line of fire.</p>",
+    "childAnswer": ""
   }
 ]`;
   }
@@ -556,8 +711,8 @@ function getImportPlaceholder(subject: string) {
   return `[
   {
     "questionType": "single_choice",
-    "topic": "分数加法",
-    "problemDescription": "计算 12 + 18 的结果。",
+    "topic": "addition",
+    "problemDescription": "Calculate the result of 12 + 18.",
     "answer": "30",
     "childAnswer": "28"
   }
@@ -580,7 +735,7 @@ function mergeUploadLinks(...groups: UploadLink[][]) {
 }
 
 function getImportStatusHint(subjectLabel: string) {
-  return `粘贴${subjectLabel} JSON 后先校验，再导入数据库；示例默认使用英文字段名，如果 JSON 里没写 subject，会自动使用当前页面学科。中文字段也兼容导入。`;
+  return `Paste ${subjectLabel} JSON here to validate before importing. The examples use English field names by default. If \`subject\` is missing, the current page subject will be used automatically. Chinese field names are still supported.`;
 }
 
 export default function App() {
@@ -598,7 +753,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [message, setMessage] = useState("正在加载题目数据...");
+  const [message, setMessage] = useState("Loading question bank...");
   const [uploadLinks, setUploadLinks] = useState<UploadLink[]>([]);
   const [pendingUploadSubject, setPendingUploadSubject] = useState<string | null>(null);
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
@@ -606,7 +761,7 @@ export default function App() {
   const [savedPromptTemplate, setSavedPromptTemplate] = useState<string | null>(null);
   const [promptUpdatedAt, setPromptUpdatedAt] = useState<string | null>(null);
   const [promptLoading, setPromptLoading] = useState(false);
-  const [promptStatus, setPromptStatus] = useState("正在加载提示词配置...");
+  const [promptStatus, setPromptStatus] = useState("Loading prompt settings...");
   const [importPayload, setImportPayload] = useState("");
   const [importStatus, setImportStatus] = useState(getImportStatusHint(getSubjectMeta(getInitialSubject()).label));
   const [importPreview, setImportPreview] = useState<ImportPreviewItem[]>([]);
@@ -616,6 +771,7 @@ export default function App() {
   const [practiceQuestion, setPracticeQuestion] = useState<Question | null>(null);
   const [practiceAnswer, setPracticeAnswer] = useState("");
   const [essayBlankAnswers, setEssayBlankAnswers] = useState<string[]>([]);
+  const [essayBlankHintVisible, setEssayBlankHintVisible] = useState<boolean[]>([]);
   const [practiceSubmitting, setPracticeSubmitting] = useState(false);
   const [practiceResult, setPracticeResult] = useState<SubmitAttemptResponse | null>(null);
   const [practiceHintVisible, setPracticeHintVisible] = useState(false);
@@ -623,6 +779,7 @@ export default function App() {
   const [practiceEssayReading, setPracticeEssayReading] = useState(false);
   const [practiceEssayRate, setPracticeEssayRate] = useState<number>(1);
   const [practiceEssayVoice, setPracticeEssayVoice] = useState<EssaySpeechVoice>("male");
+  const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [essayListSpeechMenuOpen, setEssayListSpeechMenuOpen] = useState(false);
   const [practiceSpeechMenuOpen, setPracticeSpeechMenuOpen] = useState(false);
   const [essayListReading, setEssayListReading] = useState(false);
@@ -632,10 +789,14 @@ export default function App() {
   const [practiceWordStats, setPracticeWordStats] = useState<EssayWordStat[]>([]);
   const [essayModalOpen, setEssayModalOpen] = useState(false);
   const [editingEssayQuestion, setEditingEssayQuestion] = useState<Question | null>(null);
+  const [essayEditorQuestionType, setEssayEditorQuestionType] = useState("english_essay");
   const [essayTitle, setEssayTitle] = useState("");
   const [essayTopic, setEssayTopic] = useState("");
+  const [essaySourceSentence, setEssaySourceSentence] = useState("");
   const [essaySelectedWords, setEssaySelectedWords] = useState<string[]>([]);
-  const [essayStatus, setEssayStatus] = useState("左边粘贴作文内容，选中文字后点“添加下划线出题”，右边会同步生成答题词。");
+  const [essayStatus, setEssayStatus] = useState(
+    'Paste the passage on the left, select words, then click "Underline Selected Text" to create blanks. The answer list on the right updates automatically.'
+  );
   const [essaySaving, setEssaySaving] = useState(false);
   const [tagQuestion, setTagQuestion] = useState<Question | null>(null);
   const [tagDraft, setTagDraft] = useState("");
@@ -699,7 +860,10 @@ export default function App() {
     return values.sort((a, b) => getQuestionTypeLabel(a).localeCompare(getQuestionTypeLabel(b), "zh-CN"));
   }, [subjectItems]);
 
-  const englishQuestionTypes = useMemo(() => ["english_word_reminder", "english_single_choice", "english_essay"], []);
+  const englishQuestionTypes = useMemo(
+    () => ["english_word_reminder", "english_single_choice", "english_synthesis", "english_common_sentence", "english_essay", "english_comprehension_close"],
+    []
+  );
 
   const subjectTags = useMemo(() => {
     const values = Array.from(new Set(subjectItems.flatMap((item) => item.tags ?? []).filter(Boolean)));
@@ -730,16 +894,26 @@ export default function App() {
   const previousPracticeQuestion = practiceQuestionIndex > 0 ? filteredItems[practiceQuestionIndex - 1] : null;
   const nextPracticeQuestion =
     practiceQuestionIndex >= 0 && practiceQuestionIndex < filteredItems.length - 1 ? filteredItems[practiceQuestionIndex + 1] : null;
+  const wordReminderPassed = Boolean(
+    practiceQuestion && isEnglishWordReminderQuestion(practiceQuestion.questionType) && practiceResult?.attempt.isCorrect === true
+  );
 
   const essayExercise = useMemo(() => {
-    if (!practiceQuestion || !isEnglishEssayQuestion(practiceQuestion.questionType)) {
+    if (!practiceQuestion || !isEnglishBlankPassageQuestion(practiceQuestion.questionType)) {
       return { html: "", answers: [] as string[] };
     }
     return buildEnglishEssayExercise(practiceQuestion.stem);
   }, [practiceQuestion]);
 
+  const synthesisExercise = useMemo(() => {
+    if (!practiceQuestion || !isEnglishSynthesisQuestion(practiceQuestion.questionType)) {
+      return { html: "", answers: [] as string[] };
+    }
+    return buildEnglishSynthesisExercise(practiceQuestion.stem);
+  }, [practiceQuestion]);
+
   const essayListItems = useMemo(
-    () => filteredItems.filter((item) => isEnglishEssayQuestion(item.questionType)),
+    () => filteredItems.filter((item) => isEnglishReadingQuestion(item.questionType)),
     [filteredItems]
   );
 
@@ -860,6 +1034,24 @@ export default function App() {
   }, [editingEssayQuestion, essayModalOpen]);
 
   useEffect(() => {
+    if (!("speechSynthesis" in window)) {
+      return;
+    }
+
+    const synth = window.speechSynthesis;
+    const updateVoices = () => {
+      const nextVoices = synth.getVoices();
+      if (nextVoices.length > 0) {
+        setSpeechVoices(nextVoices);
+      }
+    };
+
+    updateVoices();
+    synth.addEventListener("voiceschanged", updateVoices);
+    return () => synth.removeEventListener("voiceschanged", updateVoices);
+  }, []);
+
+  useEffect(() => {
     return () => {
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
@@ -921,7 +1113,7 @@ export default function App() {
       }
 
       setLoading(true);
-      setMessage("正在同步题目列表...");
+      setMessage("Syncing question list...");
       try {
         const response = await fetch(`${apiBase}/questions`);
         if (!response.ok) throw new Error("load failed");
@@ -929,7 +1121,7 @@ export default function App() {
         setItems(data.items ?? []);
       } catch (error) {
         console.error(error);
-        setMessage("题目加载失败，请检查后端服务是否启动");
+        setMessage("Failed to load questions. Please check whether the backend service is running.");
       } finally {
         setLoading(false);
       }
@@ -969,7 +1161,7 @@ export default function App() {
       } catch (error) {
         console.error(error);
         setUploads([]);
-        setMessage("上传图片列表加载失败");
+        setMessage("Failed to load uploaded images.");
       } finally {
         setUploadLoading(false);
       }
@@ -985,7 +1177,7 @@ export default function App() {
       }
 
       setPromptLoading(true);
-      setPromptStatus("正在加载提示词配置...");
+      setPromptStatus("Loading prompt settings...");
 
       try {
         const response = await fetch(`${apiBase}/settings/prompt`);
@@ -996,10 +1188,10 @@ export default function App() {
         setPromptTemplate(nextValue);
         setSavedPromptTemplate(nextValue);
         setPromptUpdatedAt(data.updatedAt ?? null);
-        setPromptStatus(nextValue ? "已加载数据库中的提示词配置" : "还没有保存提示词配置，输入后会自动保存");
+        setPromptStatus(nextValue ? "Prompt settings loaded from database." : "No prompt settings saved yet. Changes will be auto-saved.");
       } catch (error) {
         console.error(error);
-        setPromptStatus("提示词配置加载失败，请检查后端服务");
+        setPromptStatus("Failed to load prompt settings. Please check the backend service.");
       } finally {
         setPromptLoading(false);
       }
@@ -1013,7 +1205,7 @@ export default function App() {
       return;
     }
 
-    setPromptStatus("正在自动保存提示词配置...");
+    setPromptStatus("Auto-saving prompt settings...");
 
     const timer = window.setTimeout(() => {
       void (async () => {
@@ -1032,10 +1224,10 @@ export default function App() {
           setSavedPromptTemplate(nextValue);
           setPromptTemplate(nextValue);
           setPromptUpdatedAt(data.updatedAt ?? null);
-          setPromptStatus("提示词配置已自动保存到数据库");
+          setPromptStatus("Prompt settings were auto-saved to the database.");
         } catch (error) {
           console.error(error);
-          setPromptStatus("提示词配置保存失败，请稍后重试");
+          setPromptStatus("Failed to save prompt settings. Please try again later.");
         }
       })();
     }, 600);
@@ -1045,19 +1237,19 @@ export default function App() {
 
   useEffect(() => {
     if (settingsMode) {
-      setMessage(promptLoading ? "正在加载系统配置..." : promptStatus);
+      setMessage(promptLoading ? "Loading system settings..." : promptStatus);
       return;
     }
     if (galleryMode) {
-      setMessage(`${activeSubjectMeta.label}上传图片共 ${uploads.length} 张`);
+      setMessage(`${uploads.length} uploaded image(s) in ${activeSubjectMeta.label}`);
       return;
     }
     if (viewerMode) {
       const viewerCount = viewerGroups.reduce((count, group) => count + group.length, 0);
-      setMessage(`${activeSubjectMeta.label}当前查看 ${viewerCount} 张图片`);
+      setMessage(`Viewing ${viewerCount} image(s) in ${activeSubjectMeta.label}`);
       return;
     }
-    setMessage(`${activeSubjectMeta.label}题库共 ${filteredItems.length} 道题目`);
+    setMessage(`${filteredItems.length} question(s) in ${activeSubjectMeta.label}`);
   }, [activeSubjectMeta.label, filteredItems.length, galleryMode, promptLoading, promptStatus, settingsMode, viewerGroups, viewerMode, uploads.length]);
 
   function switchSubject(subject: string) {
@@ -1086,7 +1278,7 @@ export default function App() {
     setPracticeQuestion(null);
     setPracticeResult(null);
     setTagQuestion(null);
-    setMessage(`已切换到${getSubjectMeta(nextSubject).label}页面`);
+    setMessage(`Switched to ${getSubjectMeta(nextSubject).label}.`);
   }
 
   function switchQuestionType(questionType: string) {
@@ -1109,7 +1301,7 @@ export default function App() {
     setImportPayload(getImportPlaceholder(activeSubject));
     setImportErrors([]);
     setImportPreview([]);
-    setImportStatus(`已填入${activeSubjectMeta.label}示例 JSON，可先校验再导入。`);
+    setImportStatus(`${activeSubjectMeta.label} sample JSON has been filled in. You can validate it before importing.`);
   }
 
   function openSpeechMenu(menu: "list" | "practice") {
@@ -1132,17 +1324,31 @@ export default function App() {
     setEssayListSpeechMenuOpen(false);
   }
 
-  function openEssayModal(question?: Question) {
+  function openEssayModal(question?: Question, nextQuestionType?: string) {
     stopEssayListReading();
+    const modalQuestionType = nextQuestionType ?? question?.questionType ?? activeQuestionType ?? "english_essay";
+    const editorLabel = getEnglishPassageEditorLabel(modalQuestionType);
+    const isCommonSentence = isEnglishCommonSentenceQuestion(modalQuestionType);
+    const isSynthesis = isEnglishSynthesisQuestion(modalQuestionType);
     setEssayModalOpen(true);
     setEditingEssayQuestion(question ?? null);
+    setEssayEditorQuestionType(modalQuestionType);
     setEssayTitle(question?.title ?? "");
     setEssayTopic(question?.topic ?? "");
-    setEssaySelectedWords(question ? extractUnderlinedWords(question.stem) : []);
+    setEssaySourceSentence(question?.exampleSentence ?? "");
+    setEssaySelectedWords(isCommonSentence ? [] : question ? extractUnderlinedWords(question.stem) : []);
     setEssayStatus(
-      question
-        ? "可以继续修改正文、增减下划线单词，保存后会覆盖这道英文作文题。"
-        : "左边粘贴作文内容，选中文字后点“添加下划线出题”，右边会同步生成答题词。"
+      isCommonSentence
+        ? question
+          ? `You can continue editing this ${editorLabel} and save to overwrite the current item.`
+          : `Paste the ${editorLabel} content on the left, then save it into the question bank.`
+        : isSynthesis
+          ? question
+            ? `You can update the original sentence, adjust the underlined parts in the target sentence, and save the Synthesis item.`
+            : `Enter the original sentence first, then paste the transformed sentence and underline the parts students need to complete.`
+        : question
+          ? `You can keep editing this ${editorLabel}, add or remove underlined words, and save to overwrite the current question.`
+          : `Paste the ${editorLabel} on the left, select words, then click "Underline Selected Text". The answer list on the right will update automatically.`
     );
     if (essayStemRef.current) {
       essayStemRef.current.innerHTML = question ? sanitizeRichHtml(question.stem) : "";
@@ -1153,10 +1359,12 @@ export default function App() {
   function closeEssayModal() {
     setEssayModalOpen(false);
     setEditingEssayQuestion(null);
+    setEssayEditorQuestionType("english_essay");
     setEssayTitle("");
     setEssayTopic("");
+    setEssaySourceSentence("");
     setEssaySelectedWords([]);
-    setEssayStatus("左边粘贴作文内容，选中文字后点“添加下划线出题”，右边会同步生成答题词。");
+    setEssayStatus('Paste the passage on the left, select words, then click "Underline Selected Text" to create blanks. The answer list on the right updates automatically.');
     if (essayStemRef.current) {
       essayStemRef.current.innerHTML = "";
     }
@@ -1164,6 +1372,9 @@ export default function App() {
   }
 
   function syncEssaySelectedWordsFromEditor() {
+    if (isEnglishCommonSentenceQuestion(essayEditorQuestionType)) {
+      return;
+    }
     const html = essayStemRef.current?.innerHTML ?? "";
     setEssaySelectedWords(extractUnderlinedWords(html));
   }
@@ -1188,7 +1399,7 @@ export default function App() {
 
     const selection = window.getSelection();
     if (!selection) {
-      setEssayStatus("请先在左侧作文里选中要出题的单词。");
+      setEssayStatus("Please select the word(s) to turn into blanks in the left editor first.");
       return;
     }
 
@@ -1198,7 +1409,7 @@ export default function App() {
     }
 
     if (selection.rangeCount === 0 || selection.isCollapsed) {
-      setEssayStatus("请先在左侧作文里选中要出题的单词。");
+      setEssayStatus("Please select the word(s) to turn into blanks in the left editor first.");
       return;
     }
 
@@ -1206,7 +1417,7 @@ export default function App() {
     essayStemRef.current.innerHTML = sanitizeRichHtml(essayStemRef.current.innerHTML);
     syncEssaySelectedWordsFromEditor();
     essaySelectionRangeRef.current = null;
-    setEssayStatus("已把选中的内容加入考题，下划线单词会在做题时被挖空。");
+    setEssayStatus("Selected text has been added to the question. Underlined words will be blanked out during practice.");
   }
 
   function removeEssaySelectedWord(index: number) {
@@ -1229,7 +1440,7 @@ export default function App() {
     target.replaceWith(doc.createTextNode(target.textContent ?? ""));
     essayStemRef.current.innerHTML = sanitizeRichHtml(container.innerHTML);
     syncEssaySelectedWordsFromEditor();
-    setEssayStatus("已移除一个出题词。");
+    setEssayStatus("Removed one blank target word.");
   }
 
   function updateEssaySelectedWord(index: number, value: string) {
@@ -1260,6 +1471,7 @@ export default function App() {
     setPracticeQuestion(question);
     setPracticeAnswer("");
     setEssayBlankAnswers([]);
+    setEssayBlankHintVisible([]);
     setPracticeResult(null);
     setPracticeHintVisible(false);
     setPracticeAnswerVisible(false);
@@ -1273,6 +1485,7 @@ export default function App() {
     setPracticeQuestion(null);
     setPracticeAnswer("");
     setEssayBlankAnswers([]);
+    setEssayBlankHintVisible([]);
     setPracticeResult(null);
     setPracticeHintVisible(false);
     setPracticeAnswerVisible(false);
@@ -1289,6 +1502,7 @@ export default function App() {
     setPracticeQuestion(target);
     setPracticeAnswer("");
     setEssayBlankAnswers([]);
+    setEssayBlankHintVisible([]);
     setPracticeResult(null);
     setPracticeHintVisible(false);
     setPracticeAnswerVisible(false);
@@ -1343,24 +1557,25 @@ export default function App() {
 
   function speakEssayListItem(questions: Question[], index: number, rate: number, voicePreference: EssaySpeechVoice) {
     if (!("speechSynthesis" in window)) {
-      setMessage("当前浏览器不支持作文自动朗读");
+      setMessage("This browser does not support passage read-aloud.");
       stopEssayListReading();
       return;
     }
 
     if (index >= questions.length) {
       stopEssayListReading();
-      setMessage("作文列表已连续朗读完成");
+      setMessage("Continuous reading has finished.");
       return;
     }
 
     const question = questions[index];
     const { headerText, contentText } = buildEssaySpeechParts(question);
-    const voice = pickEnglishSpeechVoice(window.speechSynthesis.getVoices(), voicePreference);
+    const availableVoices = speechVoices.length > 0 ? speechVoices : window.speechSynthesis.getVoices();
+    const voice = pickEnglishSpeechVoice(availableVoices, voicePreference);
 
     setEssayListReading(true);
     setEssayListReadingQuestionId(question.id);
-    setMessage(`正在连续朗读第 ${index + 1}/${questions.length} 篇作文...`);
+    setMessage(`Reading passage ${index + 1} of ${questions.length}...`);
 
     const playContent = () => {
       if (!contentText) {
@@ -1384,7 +1599,7 @@ export default function App() {
       };
       contentUtterance.onerror = () => {
         stopEssayListReading();
-        setMessage("作文列表连续朗读失败，请稍后重试");
+        setMessage("Continuous reading failed. Please try again later.");
       };
       window.speechSynthesis.speak(contentUtterance);
     };
@@ -1408,7 +1623,7 @@ export default function App() {
     };
     headerUtterance.onerror = () => {
       stopEssayListReading();
-      setMessage("作文列表连续朗读失败，请稍后重试");
+      setMessage("Continuous reading failed. Please try again later.");
     };
     window.speechSynthesis.speak(headerUtterance);
   }
@@ -1416,12 +1631,12 @@ export default function App() {
   function toggleEssayListReading() {
     if (essayListReading) {
       stopEssayListReading();
-      setMessage("已停止作文列表连续朗读");
+      setMessage("Continuous reading stopped.");
       return;
     }
 
     if (essayListItems.length === 0) {
-      setMessage("当前作文列表没有可朗读的内容");
+      setMessage("There is no readable content in the current list.");
       return;
     }
 
@@ -1435,7 +1650,7 @@ export default function App() {
   function startEssayListReadingFrom(questionId: number) {
     const startIndex = essayListItems.findIndex((item) => item.id === questionId);
     if (startIndex < 0) {
-      setMessage("没有找到这篇作文，无法从这里开始朗读");
+      setMessage("Could not find this passage to start reading from here.");
       return;
     }
 
@@ -1447,18 +1662,18 @@ export default function App() {
   }
 
   function startPracticeEssayReading(rate: number) {
-    if (!practiceQuestion || !isEnglishEssayQuestion(practiceQuestion.questionType)) {
+    if (!practiceQuestion || !isEnglishReadingQuestion(practiceQuestion.questionType)) {
       return;
     }
 
     if (!("speechSynthesis" in window)) {
-      setMessage("当前浏览器不支持作文自动朗读");
+      setMessage("This browser does not support read-aloud.");
       return;
     }
 
     const speechText = buildEssaySpeechText(practiceQuestion);
     if (!speechText) {
-      setMessage("这道作文题还没有可朗读的内容");
+      setMessage("There is no readable content for this question yet.");
       return;
     }
 
@@ -1467,7 +1682,8 @@ export default function App() {
     utterance.rate = rate;
     utterance.pitch = 1;
 
-    const voice = pickEnglishSpeechVoice(window.speechSynthesis.getVoices(), practiceEssayVoice);
+    const availableVoices = speechVoices.length > 0 ? speechVoices : window.speechSynthesis.getVoices();
+    const voice = pickEnglishSpeechVoice(availableVoices, practiceEssayVoice);
     if (voice) {
       utterance.voice = voice;
     }
@@ -1479,12 +1695,12 @@ export default function App() {
     utterance.onerror = () => {
       practiceEssayUtteranceRef.current = null;
       setPracticeEssayReading(false);
-      setMessage("作文朗读失败，请稍后重试");
+      setMessage("Read-aloud failed. Please try again later.");
     };
 
     practiceEssayUtteranceRef.current = utterance;
     setPracticeEssayReading(true);
-    setMessage(`正在以 ${rate}x 速度朗读作文题目...`);
+    setMessage(`Reading at ${rate}x speed...`);
     restartSpeechAfterCancel(() => {
       window.speechSynthesis.speak(utterance);
     });
@@ -1493,7 +1709,7 @@ export default function App() {
   function togglePracticeEssayReading() {
     if (practiceEssayReading) {
       stopPracticeEssayReading();
-      setMessage("已停止作文朗读");
+      setMessage("Reading stopped.");
       return;
     }
 
@@ -1513,7 +1729,25 @@ export default function App() {
       speakEssayListItem(essayListItems, nextIndex >= 0 ? nextIndex : 0, nextRate, practiceEssayVoice);
       return;
     }
-    setMessage(`作文朗读速度已切换到 ${nextRate}x`);
+    setMessage(`Reading speed changed to ${nextRate}x.`);
+  }
+
+  function toggleEssayBlankHint(index: number) {
+    if (!practiceQuestion || !isEnglishBlankPassageQuestion(practiceQuestion.questionType)) {
+      return;
+    }
+
+    const answers = parseEssayAnswerValues(practiceQuestion.answer);
+    const answer = answers[index] ?? "";
+    if (!answer) {
+      return;
+    }
+
+    setEssayBlankHintVisible((current) => {
+      const next = [...current];
+      next[index] = !current[index];
+      return next;
+    });
   }
 
   function updatePracticeEssayVoice(nextVoice: EssaySpeechVoice) {
@@ -1532,7 +1766,7 @@ export default function App() {
       return;
     }
 
-    setMessage(`作文朗读声音已切换到${nextVoice === "male" ? "男声" : "女声"}`);
+    setMessage(`Reading voice changed to ${nextVoice === "male" ? "male" : "female"}.`);
   }
 
   function openTagModal(question: Question) {
@@ -1567,7 +1801,7 @@ export default function App() {
       return;
     }
     if (files.length > 50) {
-      setMessage("一次最多上传 50 个图片文件");
+      setMessage("You can upload up to 50 image files at a time.");
       event.target.value = "";
       return;
     }
@@ -1616,12 +1850,12 @@ export default function App() {
       setActiveSubject(pendingUploadSubject);
       setMessage(
         data.combinedItems?.length
-          ? `${getSubjectMeta(pendingUploadSubject).label}图片上传成功，共 ${uploadedItems.length} 张，生成 ${displayItems.length} 张合并图`
-          : `${getSubjectMeta(pendingUploadSubject).label}图片上传成功，共 ${uploadedItems.length} 张`
+          ? `${uploadedItems.length} image(s) uploaded to ${getSubjectMeta(pendingUploadSubject).label}, with ${displayItems.length} combined image(s) generated.`
+          : `${uploadedItems.length} image(s) uploaded to ${getSubjectMeta(pendingUploadSubject).label}.`
       );
     } catch (error) {
       console.error(error);
-      setMessage("图片上传失败，请确认文件类型、大小或网关限制");
+      setMessage("Image upload failed. Please check the file type, size, or gateway limits.");
     } finally {
       setIsUploading(false);
       setPendingUploadSubject(null);
@@ -1630,15 +1864,15 @@ export default function App() {
   }
 
   async function removeQuestion(id: number) {
-    if (!window.confirm("确认删除这道题目吗？")) return;
+    if (!window.confirm("Are you sure you want to delete this question?")) return;
     try {
       const response = await fetch(`${apiBase}/questions/${id}`, { method: "DELETE" });
       if (!response.ok) throw new Error("delete failed");
       setItems((current) => current.filter((item) => item.id !== id));
-      setMessage("题目已删除");
+      setMessage("Question deleted.");
     } catch (error) {
       console.error(error);
-      setMessage("删除失败，请稍后重试");
+      setMessage("Failed to delete the question. Please try again later.");
     }
   }
 
@@ -1654,18 +1888,19 @@ export default function App() {
       return;
     }
 
-    const answerText = isEnglishEssayQuestion(practiceQuestion.questionType)
+    const answerText = isEnglishBlankCompletionQuestion(practiceQuestion.questionType)
       ? JSON.stringify(essayBlankAnswers.map((item) => item.trim()))
       : practiceAnswer;
 
-    if (isEnglishEssayQuestion(practiceQuestion.questionType)) {
-      if (essayExercise.answers.length === 0) {
-        setMessage("这道作文题暂时没有配置挖空单词");
+    if (isEnglishBlankCompletionQuestion(practiceQuestion.questionType)) {
+      const expectedAnswers = isEnglishBlankPassageQuestion(practiceQuestion.questionType) ? essayExercise.answers : synthesisExercise.answers;
+      if (expectedAnswers.length === 0) {
+        setMessage("This question does not have any configured blank words yet.");
         return;
       }
       const filledCount = essayBlankAnswers.filter((item) => item.trim()).length;
-      if (filledCount !== essayExercise.answers.length) {
-        setMessage("请先把所有挖空单词填写完整");
+      if (filledCount !== expectedAnswers.length) {
+        setMessage("Please complete all blank fields first.");
         return;
       }
     } else if (!practiceAnswer.trim()) {
@@ -1687,21 +1922,25 @@ export default function App() {
       replaceQuestion(data.question);
       setPracticeResult(data);
       setPracticeQuestion(data.question);
-      setPracticeAnswer("");
-      setEssayBlankAnswers([]);
-    setPracticeWordStats([]);
-    setPracticeWordStatsVisible(false);
+      if (isEnglishBlankCompletionQuestion(practiceQuestion.questionType)) {
+        setPracticeAnswer("");
+      } else {
+        setPracticeAnswer("");
+        setEssayBlankAnswers([]);
+      }
+      setPracticeWordStats([]);
+      setPracticeWordStatsVisible(false);
       setMessage(data.message);
     } catch (error) {
       console.error(error);
-      setMessage("提交作答失败，请稍后重试");
+      setMessage("Failed to submit the answer. Please try again later.");
     } finally {
       setPracticeSubmitting(false);
     }
   }
 
   async function togglePracticeWordStats() {
-    if (!practiceQuestion || !isEnglishEssayQuestion(practiceQuestion.questionType)) {
+    if (!practiceQuestion || !isEnglishBlankPassageQuestion(practiceQuestion.questionType)) {
       return;
     }
 
@@ -1724,7 +1963,7 @@ export default function App() {
       setPracticeWordStatsVisible(true);
     } catch (error) {
       console.error(error);
-      setMessage("加载单词统计失败，请稍后重试");
+      setMessage("Failed to load word statistics. Please try again later.");
     } finally {
       setPracticeWordStatsLoading(false);
     }
@@ -1755,10 +1994,10 @@ export default function App() {
       replaceQuestion(data);
       setTagQuestion(data);
       setTagDraft((data.tags ?? []).join(", "));
-      setMessage(`已更新 ${data.title} 的标签`);
+      setMessage(`Tags updated for ${data.title}.`);
     } catch (error) {
       console.error(error);
-      setMessage("保存标签失败，请稍后重试");
+      setMessage("Failed to save tags. Please try again later.");
     } finally {
       setTagSaving(false);
     }
@@ -1766,14 +2005,14 @@ export default function App() {
 
   async function validateImportPayload() {
     if (!importPayload.trim()) {
-      setImportStatus("请先粘贴需要导入的 JSON。");
+      setImportStatus("Please paste the JSON you want to import first.");
       setImportErrors([]);
       setImportPreview([]);
       return;
     }
 
     setImportLoading(true);
-    setImportStatus("正在校验 JSON...");
+    setImportStatus("Validating JSON...");
     try {
       const response = await fetch(`${apiBase}/questions/import/validate`, {
         method: "POST",
@@ -1787,13 +2026,13 @@ export default function App() {
       setImportPreview(data.items ?? []);
       setImportErrors(data.errors ?? []);
       setImportStatus(
-        data.valid ? `校验通过，共 ${data.count} 条，可直接导入${activeSubjectMeta.label}题库。` : "校验未通过，请先修正下面的问题。"
+        data.valid ? `Validation passed. ${data.count} item(s) are ready to import into ${activeSubjectMeta.label}.` : "Validation failed. Please fix the issues below first."
       );
     } catch (error) {
       console.error(error);
       setImportPreview([]);
-      setImportErrors(["校验失败，请确认 JSON 格式是否正确。"]);
-      setImportStatus("校验失败");
+      setImportErrors(["Validation failed. Please make sure the JSON format is correct."]);
+      setImportStatus("Validation failed.");
     } finally {
       setImportLoading(false);
     }
@@ -1802,22 +2041,30 @@ export default function App() {
   async function saveEnglishEssay() {
     const rawStem = essayStemRef.current?.innerHTML ?? "";
     const stem = sanitizeRichHtml(rawStem);
-    const answerWords = extractUnderlinedWords(stem);
-    const answer = JSON.stringify(answerWords);
+    const isCommonSentence = isEnglishCommonSentenceQuestion(essayEditorQuestionType);
+    const isSynthesis = isEnglishSynthesisQuestion(essayEditorQuestionType);
+    const answerWords = isCommonSentence ? [] : extractUnderlinedWords(stem);
+    const answer = isCommonSentence ? stem : JSON.stringify(answerWords);
     const nextTitle = essayTitle.trim() || htmlToPlainText(stem).slice(0, 24);
     const nextTopic = essayTopic.trim();
+    const nextSourceSentence = essaySourceSentence.trim();
+    const editorLabel = getEnglishPassageEditorLabel(essayEditorQuestionType);
 
     if (!nextTopic || !stem) {
-      setEssayStatus("请至少填写知识点，并粘贴作文题内容。");
+      setEssayStatus(`Please provide at least a topic and paste the ${editorLabel} content.`);
       return;
     }
-    if (answerWords.length === 0) {
-      setEssayStatus("请先在左侧选中单词并添加下划线，至少配置一个考题。");
+    if (isSynthesis && !nextSourceSentence) {
+      setEssayStatus("Please enter the original sentence before saving this Synthesis item.");
+      return;
+    }
+    if (!isCommonSentence && answerWords.length === 0) {
+      setEssayStatus("Please underline at least one word in the left editor before saving.");
       return;
     }
 
     setEssaySaving(true);
-    setEssayStatus(editingEssayQuestion ? "正在保存英文作文修改..." : "正在保存英文作文题...");
+    setEssayStatus(editingEssayQuestion ? `Saving ${editorLabel} changes...` : `Saving ${editorLabel}...`);
     try {
       const response = await fetch(`${apiBase}/questions${editingEssayQuestion ? `/${editingEssayQuestion.id}` : ""}`, {
         method: editingEssayQuestion ? "PUT" : "POST",
@@ -1830,8 +2077,9 @@ export default function App() {
           subject: "English",
           gradeLevel: "PSLE",
           difficulty: editingEssayQuestion?.difficulty ?? "medium",
-          questionType: "english_essay",
+          questionType: essayEditorQuestionType,
           topic: nextTopic,
+          exampleSentence: isSynthesis ? nextSourceSentence : editingEssayQuestion?.exampleSentence ?? "",
           stem,
           answer,
           analysis: editingEssayQuestion?.analysis ?? "",
@@ -1844,10 +2092,10 @@ export default function App() {
 
       await reloadQuestions();
       closeEssayModal();
-      setMessage(editingEssayQuestion ? "英文作文题已更新" : "英文作文题已添加到题库");
+      setMessage(editingEssayQuestion ? `${editorLabel} updated.` : `${editorLabel} added to the question bank.`);
     } catch (error) {
       console.error(error);
-      setEssayStatus("保存失败，请稍后重试。");
+      setEssayStatus("Save failed. Please try again later.");
     } finally {
       setEssaySaving(false);
     }
@@ -1855,12 +2103,12 @@ export default function App() {
 
   async function importQuestionsFromJson() {
     if (!importPayload.trim()) {
-      setImportStatus("请先粘贴需要导入的 JSON。");
+      setImportStatus("Please paste the JSON you want to import first.");
       return;
     }
 
     setImportLoading(true);
-    setImportStatus("正在导入数据库...");
+    setImportStatus("Importing into database...");
     try {
       const response = await fetch(`${apiBase}/questions/import`, {
         method: "POST",
@@ -1872,9 +2120,9 @@ export default function App() {
 
       const data = (await response.json()) as ImportResponse | ImportValidationResponse;
       if (!response.ok) {
-        const nextErrors = "errors" in data ? data.errors ?? ["导入失败"] : ["导入失败"];
+        const nextErrors = "errors" in data ? data.errors ?? ["Import failed."] : ["Import failed."];
         setImportErrors(nextErrors);
-        setImportStatus("导入失败，请先修正校验问题。");
+        setImportStatus("Import failed. Please fix the validation issues first.");
         return;
       }
 
@@ -1883,13 +2131,12 @@ export default function App() {
       setImportErrors([]);
       setImportPreview([]);
       setImportPayload("");
-      setActiveQuestionType("");
-      setImportStatus(`已成功导入 ${result.importedCount} 条${activeSubjectMeta.label}题目，原始回答也已写入数据库。`);
-      setMessage(`已成功导入 ${result.importedCount} 条${activeSubjectMeta.label}题目`);
+      setImportStatus(`Successfully imported ${result.importedCount} item(s) into ${activeSubjectMeta.label}. Original child answers were also saved.`);
+      setMessage(`Imported ${result.importedCount} item(s) into ${activeSubjectMeta.label}.`);
       setImportModalOpen(false);
     } catch (error) {
       console.error(error);
-      setImportStatus("导入失败，请检查后端服务或数据库状态。");
+      setImportStatus("Import failed. Please check the backend service or database status.");
     } finally {
       setImportLoading(false);
     }
@@ -1901,13 +2148,13 @@ export default function App() {
         <a className="brand brand-link" href={buildHomeHref(activeSubject, activeQuestionType)}>
           <img className="brand-mark" src="/logo.svg" alt="PSLE logo" />
           <div>
-            <strong>考试题目管理系统</strong>
-            <small>{settingsMode ? "系统设置与基础配置" : "按学科切换题库页面"}</small>
+            <strong>PSLE Question Management System</strong>
+            <small>{settingsMode ? "System settings and base configuration" : "Switch the question bank by subject"}</small>
           </div>
         </a>
 
         <div className="topbar-actions">
-          <nav className="subject-nav" aria-label="学科导航">
+          <nav className="subject-nav" aria-label="Subject navigation">
             {subjectTabs.map((item) =>
               galleryMode || viewerMode || settingsMode ? (
                 <a
@@ -1940,18 +2187,18 @@ export default function App() {
             className={settingsMode ? "nav-link active nav-anchor settings-link" : "nav-link nav-anchor settings-link"}
             href={buildSettingsHref()}
           >
-            设置
+            Settings
           </a>
 
           {!settingsMode && (
             <div ref={uploadMenuRef} className={uploadMenuOpen ? "upload-menu open" : "upload-menu"}>
               <button type="button" className="upload-trigger" onClick={toggleUploadMenu}>
-                上传
+                Upload
               </button>
               <div className="upload-dropdown">
                 {subjectTabs.map((item) => (
                   <button key={item.key} type="button" className="upload-option" onClick={() => openUploadPicker(item.value)}>
-                    上传{item.label}图片
+                    Upload {item.label} Images
                   </button>
                 ))}
               </div>
@@ -1975,45 +2222,45 @@ export default function App() {
         <section className="subject-hero">
           <div>
             <p className="eyebrow">
-              {settingsMode ? "系统设置" : galleryMode || viewerMode ? `${activeSubjectMeta.label}图片库` : `${activeSubjectMeta.label}题库`}
+              {settingsMode ? "System Settings" : galleryMode || viewerMode ? `${activeSubjectMeta.label} Gallery` : `${activeSubjectMeta.label} Question Bank`}
             </p>
             <h1>
               {settingsMode
-                ? "提示词配置"
+                ? "Prompt Settings"
                 : viewerMode
-                  ? `${activeSubjectMeta.label}图片查看`
+                  ? `${activeSubjectMeta.label} Image Viewer`
                   : galleryMode
-                    ? `${activeSubjectMeta.label}合并长图`
-                    : `${activeSubjectMeta.label}题目列表`}
+                    ? `${activeSubjectMeta.label} Combined Images`
+                    : `${activeSubjectMeta.label} Question List`}
             </h1>
             <p className="hero-text">
               {settingsMode
-                ? "这里维护系统级提示词配置。输入内容后会自动保存到数据库，后续功能可以直接读取这份配置。"
+                ? "Manage system-level prompt settings here. Updates are auto-saved to the database for reuse by future features."
                 : viewerMode
                   ? viewerGroups.reduce((count, group) => count + group.length, 0) > 10
-                    ? "当前按两张图片一组展示，每一组会尽量刚好铺满一屏，方便连续查看。"
-                    : "当前只展示你点开的图片或合并图片，每一张都会按屏幕大小自适应，尽量完整显示全部内容。"
+                    ? "Images are displayed in pairs so each group can fill one screen as cleanly as possible for continuous viewing."
+                    : "Only the selected image or combined image is shown here, scaled to fit the screen while keeping the full content visible."
                   : galleryMode
-                    ? "这里直接展示该学科的合并长图；如果还没有合成长图，就展示原始上传图片。"
-                    : "右上角可以上传图片，当前学科可通过弹出面板导入 JSON；当前页还支持按题型继续筛选。"}
+                    ? "This page shows combined long images for the current subject. If no combined image exists yet, the original uploads are shown."
+                    : "Use the top-right menu to upload images. You can also import JSON for the current subject and continue filtering by question type here."}
             </p>
           </div>
           <div className="hero-card">
-            <span>数据状态</span>
+            <span>Data Status</span>
             <strong>
               {settingsMode
                 ? promptLoading
-                  ? "读取中"
+                  ? "Loading"
                   : promptTemplate !== savedPromptTemplate
-                    ? "待保存"
-                    : "已就绪"
+                    ? "Pending Save"
+                    : "Ready"
                 : importLoading
-                  ? "处理中"
+                  ? "Processing"
                 : isUploading
-                  ? "上传中"
+                  ? "Uploading"
                   : loading || uploadLoading
-                  ? "同步中"
-                  : "已就绪"}
+                  ? "Syncing"
+                  : "Ready"}
             </strong>
             <small>{message}</small>
           </div>
@@ -2024,29 +2271,29 @@ export default function App() {
             <section className="panel settings-panel">
               <div className="panel-head settings-panel-head">
                 <div>
-                  <h2>提示词配置</h2>
-                  <p className="settings-copy">建议把后续 AI 能力需要复用的通用提示、角色说明和输出要求集中放在这里。</p>
+                  <h2>Prompt Settings</h2>
+                  <p className="settings-copy">Store reusable prompts, role descriptions, and output requirements here for later AI features.</p>
                 </div>
                 <span className="settings-meta">
-                  {promptUpdatedAt ? `最近保存：${formatDateTime(promptUpdatedAt)}` : "尚未保存到数据库"}
+                  {promptUpdatedAt ? `Last saved: ${formatDateTime(promptUpdatedAt)}` : "Not saved to the database yet"}
                 </span>
               </div>
 
               <div className="settings-form">
                 <label className="settings-field">
-                  <span>提示词内容</span>
+                  <span>Prompt Content</span>
                   <textarea
                     className="settings-textarea"
                     value={promptTemplate}
                     onChange={(event) => setPromptTemplate(event.target.value)}
-                    placeholder="例如：你是一个 PSLE 题目整理助手，需要输出结构化结果、保留学科信息、优先使用中文。"
+                    placeholder="Example: You are a PSLE question assistant. Return structured output, preserve subject information, and prefer concise English."
                     rows={14}
                   />
                 </label>
 
                 <div className="settings-footer">
-                  <span className="settings-status">{promptTemplate !== savedPromptTemplate ? "输入后 600ms 自动保存" : promptStatus}</span>
-                  <span className="settings-status subtle">当前字数：{promptTemplate.length}</span>
+                  <span className="settings-status">{promptTemplate !== savedPromptTemplate ? "Auto-saves 600ms after input" : promptStatus}</span>
+                  <span className="settings-status subtle">Characters: {promptTemplate.length}</span>
                 </div>
               </div>
             </section>
@@ -2054,7 +2301,7 @@ export default function App() {
         ) : viewerMode ? (
           <section className="panel viewer-page-panel">
             {uploadLoading ? (
-              <p className="empty-copy">正在加载图片...</p>
+              <p className="empty-copy">Loading images...</p>
             ) : viewerGroups.length ? (
               <div className="viewer-groups">
                 {viewerGroups.map((group, groupIndex) => (
@@ -2073,13 +2320,13 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <p className="empty-copy">这个学科还没有上传图片。</p>
+              <p className="empty-copy">No uploaded images for this subject yet.</p>
             )}
           </section>
         ) : galleryMode ? (
           <section className="panel gallery-page-panel">
             {uploadLoading ? (
-              <p className="empty-copy">正在加载图片...</p>
+              <p className="empty-copy">Loading images...</p>
             ) : uploads.length ? (
               <div className="gallery-long-list">
                 {uploads.map((item) => (
@@ -2090,31 +2337,31 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <p className="empty-copy">这个学科还没有上传图片。</p>
+              <p className="empty-copy">No uploaded images for this subject yet.</p>
             )}
           </section>
         ) : (
           <main className="content-layout">
             <section className="panel question-panel">
               <div className="panel-head">
-                <h2>{activeSubjectMeta.label}题目列表</h2>
+                <h2>{activeSubjectMeta.label} Question List</h2>
                 <div className="question-panel-actions">
-                  {activeSubject === "English" && (
-                    <button type="button" className="secondary" onClick={() => openEssayModal()}>
-                      新增英文作文
+                  {activeSubject === "English" && isEnglishPassageEditorQuestion(activeQuestionType) && (
+                    <button type="button" className="secondary" onClick={() => openEssayModal(undefined, activeQuestionType)}>
+                      {`Add ${getEnglishPassageEditorLabel(activeQuestionType)}`}
                     </button>
                   )}
-                  {activeSubject === "English" && activeQuestionType === "english_essay" && (
+                  {activeSubject === "English" && isEnglishReadingQuestion(activeQuestionType) && (
                     <div
                       ref={essayListSpeechMenuRef}
                       className={essayListSpeechMenuOpen ? "speech-menu open" : "speech-menu"}
                       onMouseEnter={() => openSpeechMenu("list")}
                     >
                       <button type="button" className="link speech-menu-trigger" onClick={() => toggleSpeechMenu("list")}>
-                        朗读...
+                        Read...
                       </button>
                       <div className="speech-menu-panel">
-                        <div className="speech-rate-group" aria-label="作文朗读声音">
+                        <div className="speech-rate-group" aria-label="Reading voice">
                           {essaySpeechVoiceOptions.map((voice) => (
                             <button
                               key={`list-voice-${voice}`}
@@ -2122,14 +2369,14 @@ export default function App() {
                               className={practiceEssayVoice === voice ? "speech-rate-chip active" : "speech-rate-chip"}
                               onClick={() => updatePracticeEssayVoice(voice)}
                             >
-                              {voice === "male" ? "男声" : "女声"}
+                              {voice === "male" ? "Male" : "Female"}
                             </button>
                           ))}
                         </div>
                         <button type="button" className="secondary speech-menu-action" onClick={toggleEssayListReading}>
-                          {essayListReading ? "停止连续朗读" : "连续朗读作文"}
+                          {essayListReading ? "Stop Continuous Reading" : `Read ${getEnglishPassageEditorLabel(activeQuestionType)} Continuously`}
                         </button>
-                        <div className="speech-rate-group" aria-label="作文列表朗读速度">
+                        <div className="speech-rate-group" aria-label="Reading speed">
                           {essaySpeechRateOptions.map((rate) => (
                             <button
                               key={`list-${rate}`}
@@ -2145,15 +2392,15 @@ export default function App() {
                     </div>
                   )}
                   <button type="button" className="secondary" onClick={openImportModal}>
-                    导入{activeSubjectMeta.label} JSON
+                    Import {activeSubjectMeta.label} JSON
                   </button>
                   <button className="secondary" onClick={() => window.location.reload()}>
-                    刷新
+                    Refresh
                   </button>
                 </div>
               </div>
 
-              <div className="type-nav" aria-label="题型导航">
+              <div className="type-nav" aria-label="Question type navigation">
                 {activeSubject === "English" ? (
                   englishQuestionTypes.map((questionType) => (
                     <button
@@ -2162,7 +2409,7 @@ export default function App() {
                       className={activeQuestionType === questionType ? "type-chip active" : "type-chip"}
                       onClick={() => switchQuestionType(questionType)}
                     >
-                      {questionType === "english_essay" ? "作文列表" : getQuestionTypeLabel(questionType)}
+                      {isEnglishReadingQuestion(questionType) ? getEnglishPassageEntryLabel(questionType) : getQuestionTypeLabel(questionType)}
                     </button>
                   ))
                 ) : (
@@ -2172,7 +2419,7 @@ export default function App() {
                       className={activeQuestionType === "" ? "type-chip active" : "type-chip"}
                       onClick={() => switchQuestionType("")}
                     >
-                      全部题型
+                      All Types
                     </button>
                     {subjectQuestionTypes.map((questionType) => (
                       <button
@@ -2188,13 +2435,13 @@ export default function App() {
                 )}
               </div>
 
-              <div className="type-nav tag-nav" aria-label="标签导航">
+              <div className="type-nav tag-nav" aria-label="Tag navigation">
                 <button
                   type="button"
                   className={activeTag === "" ? "type-chip active" : "type-chip"}
                   onClick={() => setActiveTag("")}
                 >
-                  全部标签
+                  All Tags
                 </button>
                 {subjectTags.map((tag) => (
                   <button
@@ -2212,16 +2459,16 @@ export default function App() {
                 <input
                   value={keyword}
                   onChange={(event) => setKeyword(event.target.value)}
-                  placeholder={`搜索${activeSubjectMeta.label}题目编号、标题、题干、知识点或标签`}
+                  placeholder={`Search ${activeSubjectMeta.label} by code, title, stem, topic, or tag`}
                 />
                 <select value={status} onChange={(event) => setStatus(event.target.value)}>
-                  <option value="">全部状态</option>
-                  <option value="draft">草稿</option>
-                  <option value="published">已发布</option>
-                  <option value="archived">已归档</option>
+                  <option value="">All Statuses</option>
+                  <option value="draft">Draft</option>
+                  <option value="published">Published</option>
+                  <option value="archived">Archived</option>
                 </select>
-                <button onClick={() => setMessage(`${activeSubjectMeta.label}题库共 ${filteredItems.length} 道题目`)}>
-                  查看结果
+                <button onClick={() => setMessage(`${filteredItems.length} question(s) in ${activeSubjectMeta.label}`)}>
+                  Show Result
                 </button>
               </div>
 
@@ -2229,17 +2476,17 @@ export default function App() {
                 <table>
                   <thead>
                     <tr>
-                      <th>题目信息</th>
-                      <th>题型</th>
-                      <th>知识点</th>
-                      {showWordColumns && <th>单词</th>}
-                      {showWordColumns && <th>例句</th>}
-                      <th>标签</th>
-                      <th>答对/作答</th>
-                      <th>难度</th>
-                      <th>状态</th>
-                      <th>更新时间</th>
-                      <th>操作</th>
+                      <th>Question</th>
+                      <th>Type</th>
+                      <th>Topic</th>
+                      {showWordColumns && <th>Word</th>}
+                      {showWordColumns && <th>Example Sentence</th>}
+                      <th>Tags</th>
+                      <th>Correct / Attempts</th>
+                      <th>Difficulty</th>
+                      <th>Status</th>
+                      <th>Updated At</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2250,9 +2497,9 @@ export default function App() {
                             <strong>{item.title}</strong>
                             <span>{item.code}</span>
                             <small>{getSubjectMeta(item.subject).label}</small>
-                            {item.questionType === "english_essay" && (
+                            {isEnglishReadingQuestion(item.questionType) && (
                               <button type="button" className="link question-summary-link" onClick={() => startEssayListReadingFrom(item.id)}>
-                                从这开始朗读
+                                Read From Here
                               </button>
                             )}
                           </div>
@@ -2274,7 +2521,7 @@ export default function App() {
                                 </button>
                               ))
                             ) : (
-                              <span className="muted-text">未设标签</span>
+                              <span className="muted-text">No tags</span>
                             )}
                           </div>
                         </td>
@@ -2284,18 +2531,18 @@ export default function App() {
                         <td>{formatDateTime(item.updatedAt)}</td>
                         <td className="actions">
                           <button className="link" onClick={() => openPracticeModal(item)}>
-                            做题
+                            Practice
                           </button>
-                          {item.questionType === "english_essay" && (
+                          {isEnglishPassageEditorQuestion(item.questionType) && (
                             <button className="link" onClick={() => openEssayModal(item)}>
-                              编辑
+                              Edit
                             </button>
                           )}
                           <button className="link" onClick={() => openTagModal(item)}>
-                            标签
+                            Tags
                           </button>
                           <button className="link danger" onClick={() => void removeQuestion(item.id)}>
-                            删除
+                            Delete
                           </button>
                         </td>
                       </tr>
@@ -2303,7 +2550,7 @@ export default function App() {
                     {!filteredItems.length && (
                       <tr>
                         <td colSpan={showWordColumns ? 11 : 9} className="empty">
-                          当前学科暂无题目
+                          No questions for this subject yet.
                         </td>
                       </tr>
                     )}
@@ -2323,18 +2570,18 @@ export default function App() {
                 >
                   <div className="panel-head import-panel-head">
                     <div>
-                      <h2 id="import-modal-title">{activeSubjectMeta.label} JSON 导入</h2>
+                      <h2 id="import-modal-title">{activeSubjectMeta.label} JSON Import</h2>
                       <p className="panel-tip panel-tip-inline">
-                        字段要求：建议统一使用 `questionType / topic / problemDescription / answer / childAnswer`；英文单词提醒补 `word / exampleSentence`，英文选择题补 `optionItems`；`childAnswer` 可留空，`subject` 可省略，中文字段仍兼容。
+                        Recommended fields: `questionType / topic / problemDescription / answer / childAnswer`. For English Word Reminder add `word / exampleSentence`; for English Single Choice add `optionItems`; for Synthesis add `exampleSentence` as the original sentence; for Comprehension Close and English Essay use rich-text `problemDescription` and a JSON array string in `answer`; for Common Sentences, `problemDescription` alone is enough and `answer` may be omitted. `childAnswer` may be empty, `subject` may be omitted, and Chinese field names are still supported.
                       </p>
                     </div>
                     <button type="button" className="secondary import-close" onClick={closeImportModal}>
-                      关闭
+                      Close
                     </button>
                   </div>
 
                   <label className="import-field">
-                    <span>粘贴导入 JSON</span>
+                    <span>Paste JSON to Import</span>
                     <textarea
                       className="import-textarea"
                       value={importPayload}
@@ -2346,13 +2593,13 @@ export default function App() {
 
                   <div className="import-actions">
                     <button type="button" className="secondary" onClick={fillImportExample} disabled={importLoading}>
-                      填入示例
+                      Fill Sample
                     </button>
                     <button type="button" className="secondary" onClick={() => void validateImportPayload()} disabled={importLoading}>
-                      校验 JSON
+                      Validate JSON
                     </button>
                     <button type="button" onClick={() => void importQuestionsFromJson()} disabled={importLoading}>
-                      导入数据库
+                      Import into Database
                     </button>
                   </div>
 
@@ -2370,18 +2617,20 @@ export default function App() {
 
                   {importPreview.length > 0 && (
                     <div className="import-preview">
-                      <div className="import-preview-head">校验预览（前 5 条）</div>
+                      <div className="import-preview-head">Validation Preview (First 5 Items)</div>
                       {importPreview.slice(0, 5).map((item) => (
                         <div key={`${item.index}-${item.generatedCode}`} className="import-preview-item">
                           <strong>{item.generatedTitle}</strong>
                           <span>
                             {getSubjectMeta(item.subject).label} / {getQuestionTypeLabel(item.questionType)}
                           </span>
-                          <small>知识点：{item.topic}</small>
-                          {item.reminderWord && <small>单词：{item.reminderWord}</small>}
-                          {item.exampleSentence && <small>例句：{item.exampleSentence}</small>}
-                          {item.optionItems?.length > 0 && <small>选项：{item.optionItems.join(" / ")}</small>}
-                          <small>答案：{item.answer || "-"}</small>
+                          <small>Topic: {item.topic}</small>
+                          {item.reminderWord && <small>Word: {item.reminderWord}</small>}
+                          {item.exampleSentence && (
+                            <small>{item.questionType === "english_synthesis" ? "Original sentence" : "Example"}: {item.exampleSentence}</small>
+                          )}
+                          {item.optionItems?.length > 0 && <small>Options: {item.optionItems.join(" / ")}</small>}
+                          <small>Answer: {item.answer || "-"}</small>
                           <small>{item.generatedCode}</small>
                         </div>
                       ))}
@@ -2396,42 +2645,66 @@ export default function App() {
                 <section className="panel essay-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
                   <div className="panel-head import-panel-head">
                     <div>
-                      <h2>{editingEssayQuestion ? "编辑英文作文" : "新增英文作文"}</h2>
-                      <p className="panel-tip panel-tip-inline">左边粘贴作文内容，选中文字后一键加下划线；右边会同步生成做题答案框，可继续修改或删除。</p>
+                      <h2>{editingEssayQuestion ? `Edit ${getEnglishPassageEditorLabel(essayEditorQuestionType)}` : `Add ${getEnglishPassageEditorLabel(essayEditorQuestionType)}`}</h2>
+                      <p className="panel-tip panel-tip-inline">
+                        {isEnglishCommonSentenceQuestion(essayEditorQuestionType)
+                          ? "Paste the sentence or passage on the left and save it directly. This type is for reading and read-aloud only."
+                          : isEnglishSynthesisQuestion(essayEditorQuestionType)
+                            ? "Enter the original sentence, then paste the transformed sentence below. Underline the parts students need to complete."
+                          : "Paste the passage on the left, underline selected text with one click, and manage the generated answer blanks on the right."}
+                      </p>
                     </div>
                     <button type="button" className="secondary import-close" onClick={closeEssayModal}>
-                      关闭
+                      Close
                     </button>
                   </div>
 
                   <div className="essay-form-grid">
                     <label className="import-field">
-                      <span>标题</span>
-                      <input value={essayTitle} onChange={(event) => setEssayTitle(event.target.value)} placeholder="可选；不填会自动从作文内容生成" />
+                      <span>Title</span>
+                      <input value={essayTitle} onChange={(event) => setEssayTitle(event.target.value)} placeholder="Optional. If empty, a title will be generated from the passage." />
                     </label>
                     <label className="import-field">
-                      <span>知识点</span>
-                      <input value={essayTopic} onChange={(event) => setEssayTopic(event.target.value)} placeholder="例如：argumentative essay / formal letter" />
+                      <span>Topic</span>
+                      <input value={essayTopic} onChange={(event) => setEssayTopic(event.target.value)} placeholder="For example: argumentative essay / formal letter" />
                     </label>
+                    {isEnglishSynthesisQuestion(essayEditorQuestionType) && (
+                      <label className="import-field essay-form-full-span">
+                        <span>Original Sentence</span>
+                        <textarea
+                          className="import-textarea"
+                          value={essaySourceSentence}
+                          onChange={(event) => setEssaySourceSentence(event.target.value)}
+                          placeholder="Enter the original sentence that students need to rewrite."
+                          rows={3}
+                        />
+                      </label>
+                    )}
                   </div>
 
-                  <div className="essay-editor-layout">
+                  <div className={isEnglishCommonSentenceQuestion(essayEditorQuestionType) ? "essay-editor-layout single-pane" : "essay-editor-layout"}>
                     <section className="essay-editor-pane">
-                      <div className="essay-editor-toolbar">
-                        <button type="button" className="secondary" onMouseDown={(event) => event.preventDefault()} onClick={addUnderlineQuestionWord}>
-                          给选中文字加下划线
-                        </button>
-                        <span className="panel-tip">先在左侧选中单词，再点这个按钮</span>
-                      </div>
+                      {!isEnglishCommonSentenceQuestion(essayEditorQuestionType) && (
+                        <div className="essay-editor-toolbar">
+                          <button type="button" className="secondary" onMouseDown={(event) => event.preventDefault()} onClick={addUnderlineQuestionWord}>
+                            Underline Selected Text
+                          </button>
+                          <span className="panel-tip">Select words in the left editor first, then click this button.</span>
+                        </div>
+                      )}
 
                       <label className="import-field">
-                        <span>作文题内容</span>
+                        <span>{isEnglishSynthesisQuestion(essayEditorQuestionType) ? "Transformed Sentence" : `${getEnglishPassageEditorLabel(essayEditorQuestionType)} Content`}</span>
                         <div
                           ref={essayStemRef}
                           className="rich-editor essay-editor-main"
                           contentEditable
                           suppressContentEditableWarning
-                          data-placeholder="在这里直接粘贴英文作文题内容，原有粗体和高亮会尽量保留"
+                          data-placeholder={
+                            isEnglishSynthesisQuestion(essayEditorQuestionType)
+                              ? "Paste the target sentence here. Underline the parts students need to complete."
+                              : "Paste the English passage here. Existing bold text and highlights will be preserved as much as possible."
+                          }
                           onMouseUp={rememberEssaySelection}
                           onKeyUp={rememberEssaySelection}
                           onInput={syncEssaySelectedWordsFromEditor}
@@ -2439,33 +2712,43 @@ export default function App() {
                       </label>
                     </section>
 
-                    <section className="essay-answer-pane">
-                      <div className="essay-answer-head">
-                        <strong>答题框</strong>
-                        <span className="panel-tip">右侧每一项就是学生做题时要填写的单词</span>
-                      </div>
-
-                      {essaySelectedWords.length > 0 ? (
-                        <div className="essay-selected-list">
-                          {essaySelectedWords.map((word, index) => (
-                            <div key={`${index}-${word}`} className="essay-selected-item">
-                              <span>{index + 1}</span>
-                              <input value={word} onChange={(event) => updateEssaySelectedWord(index, event.target.value)} />
-                              <button type="button" className="link danger" onClick={() => removeEssaySelectedWord(index)}>
-                                删除
-                              </button>
-                            </div>
-                          ))}
+                    {!isEnglishCommonSentenceQuestion(essayEditorQuestionType) && (
+                      <section className="essay-answer-pane">
+                        <div className="essay-answer-head">
+                          <strong>{isEnglishSynthesisQuestion(essayEditorQuestionType) ? "Blanked Parts" : "Answer Blanks"}</strong>
+                          <span className="panel-tip">
+                            {isEnglishSynthesisQuestion(essayEditorQuestionType)
+                              ? "These underlined parts will be hidden in the target sentence during practice."
+                              : "Each item on the right becomes one answer field during practice."}
+                          </span>
                         </div>
-                      ) : (
-                        <p className="empty-copy">还没有出题词。先在左侧选中文字，再点“给选中文字加下划线”。</p>
-                      )}
-                    </section>
+
+                        {essaySelectedWords.length > 0 ? (
+                          <div className="essay-selected-list">
+                            {essaySelectedWords.map((word, index) => (
+                              <div key={`${index}-${word}`} className="essay-selected-item">
+                                <span>{index + 1}</span>
+                                <input value={word} onChange={(event) => updateEssaySelectedWord(index, event.target.value)} />
+                                <button type="button" className="link danger" onClick={() => removeEssaySelectedWord(index)}>
+                                  Delete
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="empty-copy">
+                            {isEnglishSynthesisQuestion(essayEditorQuestionType)
+                              ? 'No hidden parts yet. Select text in the target sentence, then click "Underline Selected Text".'
+                              : 'No blank words yet. Select text on the left, then click "Underline Selected Text".'}
+                          </p>
+                        )}
+                      </section>
+                    )}
                   </div>
 
                   <div className="import-actions">
                     <button type="button" onClick={() => void saveEnglishEssay()} disabled={essaySaving}>
-                      {editingEssayQuestion ? "保存修改" : "保存作文"}
+                      {editingEssayQuestion ? "Save Changes" : `Save ${getEnglishPassageEditorLabel(essayEditorQuestionType)}`}
                     </button>
                   </div>
 
@@ -2485,13 +2768,13 @@ export default function App() {
                       </p>
                     </div>
                     <button type="button" className="secondary import-close" onClick={closePracticeModal}>
-                      关闭
+                      Close
                     </button>
                   </div>
 
                   <div className="practice-meta">
-                    <span>累计作答 {practiceQuestion.attemptsCount} 次</span>
-                    <span>答对 {practiceQuestion.correctCount} 次</span>
+                    <span>Attempts: {practiceQuestion.attemptsCount}</span>
+                    <span>Correct: {practiceQuestion.correctCount}</span>
                     {(practiceQuestion.tags ?? []).map((tag) => (
                       <span key={tag} className="tag-pill static">
                         {tag}
@@ -2499,36 +2782,206 @@ export default function App() {
                     ))}
                   </div>
 
-                  {isEnglishEssayQuestion(practiceQuestion.questionType) ? (
-                    <div className="practice-essay-layout">
-                      <div
-                        className="practice-stem rich-render"
-                        dangerouslySetInnerHTML={{
-                          __html: essayExercise.html || "<p>-</p>"
-                        }}
-                      />
-
-                      <label className="import-field practice-essay-answer-field">
-                        <span>填写被挖空的单词</span>
-                        <div className="essay-answer-grid essay-answer-grid-vertical">
-                          {essayExercise.answers.map((_, index) => (
-                            <label key={index} className="essay-answer-item essay-answer-item-inline">
-                              <span>{index + 1}</span>
-                              <input
-                                value={essayBlankAnswers[index] ?? ""}
-                                onChange={(event) =>
-                                  setEssayBlankAnswers((current) => {
-                                    const next = [...current];
-                                    next[index] = event.target.value;
-                                    return next;
-                                  })
-                                }
-                                placeholder="输入单词"
-                              />
-                            </label>
-                          ))}
+                  {isEnglishReadingQuestion(practiceQuestion.questionType) ? (
+                    <div className={isEnglishBlankPassageQuestion(practiceQuestion.questionType) ? "practice-essay-layout" : "practice-reading-layout"}>
+                      <div className="practice-essay-content">
+                        <div className="practice-hint-block practice-essay-toolbar">
+                          <div
+                            ref={practiceSpeechMenuRef}
+                            className={practiceSpeechMenuOpen ? "speech-menu open" : "speech-menu"}
+                            onMouseEnter={() => openSpeechMenu("practice")}
+                          >
+                            <button type="button" className="link speech-menu-trigger" onClick={() => toggleSpeechMenu("practice")}>
+                              Read...
+                            </button>
+                            <div className="speech-menu-panel">
+                              <div className="speech-rate-group" aria-label="Reading voice">
+                                {essaySpeechVoiceOptions.map((voice) => (
+                                  <button
+                                    key={`practice-voice-${voice}`}
+                                    type="button"
+                                    className={practiceEssayVoice === voice ? "speech-rate-chip active" : "speech-rate-chip"}
+                                    onClick={() => updatePracticeEssayVoice(voice)}
+                                  >
+                                    {voice === "male" ? "Male" : "Female"}
+                                  </button>
+                                ))}
+                              </div>
+                              <button type="button" className="secondary speech-menu-action" onClick={togglePracticeEssayReading}>
+                                {practiceEssayReading ? "Stop Reading" : `Read ${getEnglishPassageEditorLabel(practiceQuestion.questionType)}`}
+                              </button>
+                              <div className="speech-rate-group" aria-label="Reading speed">
+                                {essaySpeechRateOptions.map((rate) => (
+                                  <button
+                                    key={rate}
+                                    type="button"
+                                    className={practiceEssayRate === rate ? "speech-rate-chip active" : "speech-rate-chip"}
+                                    onClick={() => updatePracticeEssayRate(rate)}
+                                  >
+                                    {rate}x
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                      </label>
+                        <div
+                          className="practice-stem rich-render"
+                          dangerouslySetInnerHTML={{
+                            __html: isEnglishBlankPassageQuestion(practiceQuestion.questionType)
+                              ? essayExercise.html || "<p>-</p>"
+                              : sanitizeRichHtml(practiceQuestion.stem) || "<p>-</p>"
+                          }}
+                        />
+                      </div>
+
+                      {isEnglishBlankPassageQuestion(practiceQuestion.questionType) && (
+                        <label className="import-field practice-essay-answer-field">
+                          <span>Fill in the blanked words</span>
+                          <div className="essay-answer-grid essay-answer-grid-vertical">
+                            {essayExercise.answers.map((_, index) => {
+                              const userAnswer = practiceResult ? parseEssayAnswerValues(practiceResult.attempt.answerText)[index] ?? "" : "";
+                              const correctAnswer = practiceResult ? parseEssayAnswerValues(practiceResult.correctAnswer)[index] ?? "" : "";
+                              const showMaskedHint = Boolean(essayBlankHintVisible[index]) && Boolean(essayExercise.answers[index]);
+                              const showInlineCorrectAnswer =
+                                Boolean(practiceResult) &&
+                                normalizeEssayAnswerValue(userAnswer) !== normalizeEssayAnswerValue(correctAnswer) &&
+                                Boolean(correctAnswer);
+
+                              return (
+                                <label
+                                  key={index}
+                                  className={
+                                    showInlineCorrectAnswer || showMaskedHint
+                                      ? "essay-answer-item essay-answer-item-inline has-feedback"
+                                      : "essay-answer-item essay-answer-item-inline"
+                                  }
+                                >
+                                  <span className="essay-answer-index-group">
+                                    <span>{index + 1}</span>
+                                    <button
+                                      type="button"
+                                      className="essay-answer-reveal-button"
+                                      aria-label={
+                                        showMaskedHint
+                                          ? `Hide hint for blank ${index + 1}`
+                                          : `Show hint for blank ${index + 1}`
+                                      }
+                                      onClick={() => toggleEssayBlankHint(index)}
+                                    >
+                                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path
+                                          d="M2.2 12c2.1-3.8 5.7-6 9.8-6s7.7 2.2 9.8 6c-2.1 3.8-5.7 6-9.8 6s-7.7-2.2-9.8-6Z"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="1.8"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                        <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                                      </svg>
+                                    </button>
+                                  </span>
+                                  <input
+                                    value={essayBlankAnswers[index] ?? ""}
+                                    onChange={(event) =>
+                                      setEssayBlankAnswers((current) => {
+                                        const next = [...current];
+                                        next[index] = event.target.value;
+                                        return next;
+                                      })
+                                    }
+                                    placeholder="Enter word"
+                                  />
+                                  {showInlineCorrectAnswer ? (
+                                    <small className="essay-answer-inline-correct">Correct: {correctAnswer}</small>
+                                  ) : showMaskedHint ? (
+                                    <small className="essay-answer-inline-hint">Hint: {buildMaskedPassageHint(essayExercise.answers[index] ?? "")}</small>
+                                  ) : null}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </label>
+                      )}
+                    </div>
+                  ) : isEnglishSynthesisQuestion(practiceQuestion.questionType) ? (
+                    <div className="practice-synthesis-layout">
+                      <div className="practice-synthesis-block">
+                        <strong className="practice-synthesis-label">Original Sentence</strong>
+                        <div className="practice-stem">{practiceQuestion.exampleSentence || "-"}</div>
+                      </div>
+                      <div className="practice-synthesis-block">
+                        <strong className="practice-synthesis-label">Rewrite With The Same Meaning</strong>
+                        <div
+                          className="practice-stem rich-render"
+                          dangerouslySetInnerHTML={{
+                            __html: synthesisExercise.html || sanitizeRichHtml(practiceQuestion.stem) || "<p>-</p>"
+                          }}
+                        />
+                      </div>
+                        <label className="import-field practice-synthesis-answer-field">
+                          {(() => {
+                            const submittedAnswers = practiceResult ? parseEssayAnswerValues(practiceResult.attempt.answerText) : [];
+                            const correctAnswers = practiceResult ? parseEssayAnswerValues(practiceResult.correctAnswer) : [];
+                            const allCorrect =
+                              Boolean(practiceResult) &&
+                              synthesisExercise.answers.length > 0 &&
+                              synthesisExercise.answers.every(
+                                (_, index) =>
+                                  normalizeEssayAnswerValue(submittedAnswers[index] ?? "") === normalizeEssayAnswerValue(correctAnswers[index] ?? "")
+                              );
+
+                            return (
+                              <>
+                                <div className="practice-synthesis-answer-head">
+                                  <span>Fill in the missing part{`${synthesisExercise.answers.length > 1 ? "s" : ""}`}</span>
+                                  {allCorrect ? <span className="word-reminder-feedback correct">Correct</span> : null}
+                                </div>
+                                <div className="essay-answer-grid essay-answer-grid-vertical">
+                                  {synthesisExercise.answers.map((_, index) => {
+                                    const userAnswer = submittedAnswers[index] ?? "";
+                                    const correctAnswer = correctAnswers[index] ?? "";
+                                    const showInlineCorrectAnswer =
+                                      Boolean(practiceResult) &&
+                                      normalizeEssayAnswerValue(userAnswer) !== normalizeEssayAnswerValue(correctAnswer) &&
+                                      Boolean(correctAnswer);
+
+                                    return (
+                                      <label
+                                        key={index}
+                                        className={showInlineCorrectAnswer ? "essay-answer-item essay-answer-item-inline has-feedback" : "essay-answer-item essay-answer-item-inline"}
+                                      >
+                                        <span>{index + 1}</span>
+                                        <input
+                                          className={
+                                            allCorrect
+                                              ? "word-reminder-answer-input correct"
+                                              : showInlineCorrectAnswer
+                                                ? "word-reminder-answer-input wrong"
+                                                : "word-reminder-answer-input"
+                                          }
+                                          value={essayBlankAnswers[index] ?? ""}
+                                          onChange={(event) =>
+                                            setEssayBlankAnswers((current) => {
+                                              const next = [...current];
+                                              next[index] = event.target.value;
+                                              return next;
+                                            })
+                                          }
+                                          placeholder="Enter the missing words"
+                                        />
+                                        {showInlineCorrectAnswer ? (
+                                          <small className="word-reminder-feedback wrong">Incorrect. Correct answer: {correctAnswer}</small>
+                                        ) : null}
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </label>
                     </div>
                   ) : (
                     <>
@@ -2570,28 +3023,54 @@ export default function App() {
                       <label className="import-field">
                         <span>
                           {isEnglishSingleChoiceQuestion(practiceQuestion.questionType)
-                            ? "选择正确答案"
+                            ? "Choose the correct answer"
                             : isEnglishWordReminderQuestion(practiceQuestion.questionType)
-                            ? "填写被隐藏的英文单词"
+                            ? "Fill in the hidden English word"
                             : isObjectiveQuestionType(practiceQuestion.questionType)
-                              ? "输入你的答案"
-                              : "输入你的回答"}
+                              ? "Enter your answer"
+                              : "Enter your response"}
                         </span>
                         {isEnglishSingleChoiceQuestion(practiceQuestion.questionType) ? (
-                          <input value={practiceAnswer} readOnly placeholder="点击上方选项进行作答" />
+                          <input value={practiceAnswer} readOnly placeholder="Click an option above to answer" />
+                        ) : isEnglishWordReminderQuestion(practiceQuestion.questionType) ? (
+                          <div className="word-reminder-answer-row">
+                            <input
+                              className={
+                                practiceResult?.attempt.isCorrect === true
+                                  ? "word-reminder-answer-input correct"
+                                  : practiceResult && practiceResult.attempt.isCorrect === false
+                                    ? "word-reminder-answer-input wrong"
+                                    : "word-reminder-answer-input"
+                              }
+                              value={practiceAnswer}
+                              onChange={(event) => setPracticeAnswer(event.target.value)}
+                              placeholder="Enter the missing English word"
+                            />
+                            {practiceResult && (
+                              <span
+                                className={
+                                  practiceResult.attempt.isCorrect === true
+                                    ? "word-reminder-feedback correct"
+                                    : "word-reminder-feedback wrong"
+                                }
+                              >
+                                {practiceResult.attempt.isCorrect === true
+                                  ? "Correct"
+                                  : `Incorrect. Correct answer: ${practiceResult.correctAnswer || practiceQuestion.answer}`}
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <textarea
                             className="import-textarea"
                             value={practiceAnswer}
                             onChange={(event) => setPracticeAnswer(event.target.value)}
                             placeholder={
-                              isEnglishWordReminderQuestion(practiceQuestion.questionType)
-                                ? "请输入缺失的英文单词"
-                                : isObjectiveQuestionType(practiceQuestion.questionType)
-                                  ? "例如：A 或 A,C"
-                                  : "请输入你的回答"
+                              isObjectiveQuestionType(practiceQuestion.questionType)
+                                  ? "For example: A or A,C"
+                                  : "Enter your response"
                             }
-                            rows={isEnglishWordReminderQuestion(practiceQuestion.questionType) ? 3 : 6}
+                            rows={6}
                           />
                         )}
                       </label>
@@ -2601,68 +3080,30 @@ export default function App() {
                   {isEnglishWordReminderQuestion(practiceQuestion.questionType) && (
                     <div className="practice-hint-block">
                       <button type="button" className="link" onClick={() => setPracticeHintVisible((current) => !current)}>
-                        {practiceHintVisible ? "隐藏提示" : "显示提示"}
+                        {practiceHintVisible ? "Hide Hint" : "Show Hint"}
                       </button>
                       {practiceHintVisible && (
-                        <span className="practice-hint-text">提示：{buildReminderHint(practiceQuestion.reminderWord || practiceQuestion.answer)}</span>
+                        <span className="practice-hint-text">Hint: {buildReminderHint(practiceQuestion.reminderWord || practiceQuestion.answer)}</span>
                       )}
                     </div>
                   )}
 
-                  <div className="practice-hint-block">
-                    {isEnglishEssayQuestion(practiceQuestion.questionType) && (
-                      <div
-                        ref={practiceSpeechMenuRef}
-                        className={practiceSpeechMenuOpen ? "speech-menu open" : "speech-menu"}
-                        onMouseEnter={() => openSpeechMenu("practice")}
-                      >
-                        <button type="button" className="link speech-menu-trigger" onClick={() => toggleSpeechMenu("practice")}>
-                          朗读...
-                        </button>
-                        <div className="speech-menu-panel">
-                          <div className="speech-rate-group" aria-label="朗读声音">
-                            {essaySpeechVoiceOptions.map((voice) => (
-                              <button
-                                key={`practice-voice-${voice}`}
-                                type="button"
-                                className={practiceEssayVoice === voice ? "speech-rate-chip active" : "speech-rate-chip"}
-                                onClick={() => updatePracticeEssayVoice(voice)}
-                              >
-                                {voice === "male" ? "男声" : "女声"}
-                              </button>
-                            ))}
-                          </div>
-                          <button type="button" className="secondary speech-menu-action" onClick={togglePracticeEssayReading}>
-                            {practiceEssayReading ? "停止朗读" : "朗读作文"}
-                          </button>
-                          <div className="speech-rate-group" aria-label="朗读速度">
-                            {essaySpeechRateOptions.map((rate) => (
-                              <button
-                                key={rate}
-                                type="button"
-                                className={practiceEssayRate === rate ? "speech-rate-chip active" : "speech-rate-chip"}
-                                onClick={() => updatePracticeEssayRate(rate)}
-                              >
-                                {rate}x
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <button type="button" className="link" onClick={() => setPracticeAnswerVisible((current) => !current)}>
-                      {practiceAnswerVisible ? "隐藏答案" : "显示答案"}
-                    </button>
-                    {isEnglishEssayQuestion(practiceQuestion.questionType) && (
-                      <button type="button" className="link" onClick={() => void togglePracticeWordStats()}>
-                        {practiceWordStatsVisible ? "隐藏单词统计" : "查看单词统计"}
+                  {!isEnglishCommonSentenceQuestion(practiceQuestion.questionType) && (
+                    <div className="practice-hint-block">
+                      <button type="button" className="link" onClick={() => setPracticeAnswerVisible((current) => !current)}>
+                        {practiceAnswerVisible ? "Hide Answer" : "Show Answer"}
                       </button>
-                    )}
-                  </div>
+                      {isEnglishBlankPassageQuestion(practiceQuestion.questionType) && (
+                        <button type="button" className="link" onClick={() => void togglePracticeWordStats()}>
+                          {practiceWordStatsVisible ? "Hide Word Stats" : "View Word Stats"}
+                        </button>
+                      )}
+                    </div>
+                  )}
 
-                  {isEnglishEssayQuestion(practiceQuestion.questionType) && practiceWordStatsVisible && (
+                  {isEnglishBlankPassageQuestion(practiceQuestion.questionType) && practiceWordStatsVisible && (
                     <div className="practice-result">
-                      <strong>{practiceWordStatsLoading ? "正在加载单词统计..." : "单词成功次数 / 总次数"}</strong>
+                      <strong>{practiceWordStatsLoading ? "Loading word stats..." : "Word Success Count / Total Attempts"}</strong>
                       {!practiceWordStatsLoading && (
                         <div className="essay-word-stats-list">
                           {practiceWordStats.map((item) => (
@@ -2681,45 +3122,64 @@ export default function App() {
                       type="button"
                       className="secondary"
                       onClick={() => navigatePracticeQuestion("previous")}
-                      disabled={!previousPracticeQuestion || practiceSubmitting}
+                      disabled={
+                        !previousPracticeQuestion ||
+                        practiceSubmitting ||
+                        (practiceQuestion && isEnglishWordReminderQuestion(practiceQuestion.questionType) && !wordReminderPassed)
+                      }
                     >
-                      上一题
+                      Previous
                     </button>
                     <button
                       type="button"
                       className="secondary"
                       onClick={() => navigatePracticeQuestion("next")}
-                      disabled={!nextPracticeQuestion || practiceSubmitting}
-                    >
-                      下一题
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void submitPracticeAnswer()}
                       disabled={
+                        !nextPracticeQuestion ||
                         practiceSubmitting ||
-                        (isEnglishEssayQuestion(practiceQuestion.questionType)
-                          ? essayExercise.answers.length === 0
-                          : !practiceAnswer.trim())
+                        (practiceQuestion && isEnglishWordReminderQuestion(practiceQuestion.questionType) && !wordReminderPassed)
                       }
                     >
-                      提交作答
+                      Next
                     </button>
+                    {!isEnglishCommonSentenceQuestion(practiceQuestion.questionType) && (
+                      <button
+                        type="button"
+                        onClick={() => void submitPracticeAnswer()}
+                        disabled={
+                          practiceSubmitting ||
+                          (isEnglishBlankCompletionQuestion(practiceQuestion.questionType)
+                            ? (isEnglishBlankPassageQuestion(practiceQuestion.questionType) ? essayExercise.answers.length : synthesisExercise.answers.length) === 0
+                            : !practiceAnswer.trim())
+                        }
+                      >
+                        Submit Answer
+                      </button>
+                    )}
                   </div>
 
                   {practiceAnswerVisible &&
-                    (isEnglishEssayQuestion(practiceQuestion.questionType) ? (
+                    (isEnglishBlankPassageQuestion(practiceQuestion.questionType) ? (
                       <div className="practice-result">
-                        <strong>参考答案</strong>
+                        <strong>Reference Answer</strong>
                         <div className="essay-correct-list">
                           {parseEssayCorrectAnswer(practiceResult?.correctAnswer || practiceQuestion.answer).map((line) => (
                             <div key={line}>{line}</div>
                           ))}
                         </div>
                       </div>
+                    ) : isEnglishSynthesisQuestion(practiceQuestion.questionType) ? (
+                      <div className="practice-result">
+                        <strong>Reference Answer</strong>
+                        <div className="essay-correct-list">
+                          {parseEssayCorrectAnswer(practiceResult?.correctAnswer || JSON.stringify(synthesisExercise.answers)).map((line) => (
+                            <div key={line}>{line}</div>
+                          ))}
+                        </div>
+                      </div>
                     ) : isRichTextQuestionType(practiceQuestion.questionType) ? (
                       <div className="practice-result">
-                        <strong>参考答案</strong>
+                        <strong>Reference Answer</strong>
                         <div
                           className="rich-render practice-reference-answer"
                           dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(practiceResult?.correctAnswer || practiceQuestion.answer) || "<p>-</p>" }}
@@ -2727,7 +3187,7 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="practice-result">
-                        <strong>参考答案</strong>
+                        <strong>Reference Answer</strong>
                         <div>
                           {isEnglishSingleChoiceQuestion(practiceQuestion.questionType)
                             ? resolveChoiceAnswerLabel(practiceQuestion, practiceResult?.correctAnswer || practiceQuestion.answer)
@@ -2740,27 +3200,12 @@ export default function App() {
                     <div className="practice-result">
                       <strong>{practiceResult.message}</strong>
                       {isEnglishWordReminderQuestion(practiceQuestion.questionType) && practiceQuestion.exampleSentence && (
-                        <div>例句原文：{practiceQuestion.exampleSentence}</div>
+                        <div>Original sentence: {practiceQuestion.exampleSentence}</div>
                       )}
-                      {isEnglishEssayQuestion(practiceQuestion.questionType) ? (
-                        <>
-                          <div>你的答案：</div>
-                          <div className="essay-correct-list">
-                            {parseEssayCorrectAnswer(practiceResult.attempt.answerText).map((line) => (
-                              <div key={line}>{line}</div>
-                            ))}
-                          </div>
-                          <div>正确答案：</div>
-                          <div className="essay-correct-list">
-                            {parseEssayCorrectAnswer(practiceResult.correctAnswer).map((line) => (
-                              <div key={line}>{line}</div>
-                            ))}
-                          </div>
-                        </>
-                      ) : isRichTextQuestionType(practiceQuestion.questionType) ? (
+                      {isEnglishWordReminderQuestion(practiceQuestion.questionType) ? null : isEnglishBlankCompletionQuestion(practiceQuestion.questionType) ? null : isRichTextQuestionType(practiceQuestion.questionType) ? (
                         <div>
-                          <div>你的答案：{practiceResult.attempt.answerText}</div>
-                          <div>参考答案：</div>
+                          <div>Your answer: {practiceResult.attempt.answerText}</div>
+                          <div>Reference answer:</div>
                           <div
                             className="rich-render practice-reference-answer"
                             dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(practiceResult.correctAnswer) || "<p>-</p>" }}
@@ -2769,13 +3214,13 @@ export default function App() {
                       ) : (
                         <>
                           <div>
-                            你的答案：
+                            Your answer:
                             {isEnglishSingleChoiceQuestion(practiceQuestion.questionType)
                               ? resolveChoiceAnswerLabel(practiceQuestion, practiceResult.attempt.answerText)
                               : practiceResult.attempt.answerText}
                           </div>
                           <div>
-                            参考答案：
+                            Reference answer:
                             {isEnglishSingleChoiceQuestion(practiceQuestion.questionType)
                               ? resolveChoiceAnswerLabel(practiceQuestion, practiceResult.correctAnswer)
                               : practiceResult.correctAnswer}
@@ -2783,7 +3228,7 @@ export default function App() {
                         </>
                       )}
                       {!isObjectiveQuestionType(practiceQuestion.questionType) && practiceQuestion.analysis && (
-                        <div>解析：{practiceQuestion.analysis}</div>
+                        <div>Analysis: {practiceQuestion.analysis}</div>
                       )}
                     </div>
                   )}
@@ -2797,21 +3242,21 @@ export default function App() {
                   <div className="panel-head import-panel-head">
                     <div>
                       <h2>{tagQuestion.title}</h2>
-                      <p className="panel-tip panel-tip-inline">用逗号分隔多个标签，保存后可直接用于快速过滤。</p>
+                      <p className="panel-tip panel-tip-inline">Separate tags with commas. Saved tags can be used immediately for quick filtering.</p>
                     </div>
                     <button type="button" className="secondary import-close" onClick={closeTagModal}>
-                      关闭
+                      Close
                     </button>
                   </div>
 
                   <label className="import-field">
-                    <span>标签</span>
-                    <input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="例如：易错题, 期中复习, 分数" />
+                    <span>Tags</span>
+                    <input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="For example: common mistake, midterm review, fractions" />
                   </label>
 
                   <div className="import-actions">
                     <button type="button" onClick={() => void saveQuestionTags()} disabled={tagSaving}>
-                      保存标签
+                      Save Tags
                     </button>
                   </div>
                 </section>
