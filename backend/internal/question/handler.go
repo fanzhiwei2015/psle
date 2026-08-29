@@ -34,7 +34,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+        studentID := parseStudentID(r)
 	filter := ListFilter{
+                StudentID:    studentID,
 		Keyword:      r.URL.Query().Get("keyword"),
 		Subject:      r.URL.Query().Get("subject"),
 		Status:       r.URL.Query().Get("status"),
@@ -56,7 +58,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q, err := h.repo.GetByID(r.Context(), id)
+        q, err := h.repo.GetByID(r.Context(), parseStudentID(r), id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "question not found")
@@ -75,7 +77,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q, err := h.repo.Create(r.Context(), input)
+        q, err := h.repo.Create(r.Context(), parseStudentID(r), input)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create question")
 		return
@@ -98,6 +100,7 @@ func (h *Handler) validateImport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) importQuestions(w http.ResponseWriter, r *http.Request) {
+        studentID := parseStudentID(r)
 	inputs, validation, ok := decodeImportPayload(w, r)
 	if !ok {
 		return
@@ -109,7 +112,7 @@ func (h *Handler) importQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.repo.Import(r.Context(), inputs)
+        result, err := h.repo.Import(r.Context(), studentID, inputs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to import questions")
 		return
@@ -129,7 +132,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q, err := h.repo.Update(r.Context(), id, input)
+        q, err := h.repo.Update(r.Context(), parseStudentID(r), id, input)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "question not found")
@@ -154,7 +157,7 @@ func (h *Handler) updateTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q, err := h.repo.UpdateTags(r.Context(), id, input.Tags)
+        q, err := h.repo.UpdateTags(r.Context(), parseStudentID(r), id, input.Tags)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "question not found")
@@ -184,7 +187,7 @@ func (h *Handler) submitAttempt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.repo.SubmitAttempt(r.Context(), id, input)
+        result, err := h.repo.SubmitAttempt(r.Context(), parseStudentID(r), id, input)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "question not found")
@@ -203,7 +206,7 @@ func (h *Handler) essayWordStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.repo.EssayWordStats(r.Context(), id)
+        result, err := h.repo.EssayWordStats(r.Context(), parseStudentID(r), id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "question not found")
@@ -222,7 +225,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.repo.Delete(r.Context(), id); err != nil {
+        if err := h.repo.Delete(r.Context(), parseStudentID(r), id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "question not found")
 			return
@@ -242,6 +245,14 @@ func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	}
 
 	return id, true
+}
+
+func parseStudentID(r *http.Request) int64 {
+        studentID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("studentId")), 10, 64)
+        if err != nil || studentID <= 0 {
+                return 1
+        }
+        return studentID
 }
 
 func decodeInput(w http.ResponseWriter, r *http.Request) (SaveQuestionInput, bool) {

@@ -54,6 +54,7 @@ type SaveQuestionInput struct {
 }
 
 type ListFilter struct {
+        StudentID    int64
 	Keyword      string
 	Subject      string
 	Status       string

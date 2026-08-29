@@ -2,9 +2,22 @@ CREATE DATABASE IF NOT EXISTS psle_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unic
 USE psle_db;
 SET NAMES utf8mb4;
 
+CREATE TABLE IF NOT EXISTS students (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_students_name (name)
+);
+
+INSERT INTO students (id, name)
+VALUES (1, 'Default Student')
+ON DUPLICATE KEY UPDATE name = VALUES(name);
+
 CREATE TABLE IF NOT EXISTS questions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  code VARCHAR(64) NOT NULL UNIQUE,
+  student_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  code VARCHAR(64) NOT NULL,
   title VARCHAR(255) NOT NULL,
   subject VARCHAR(64) NOT NULL,
   grade_level VARCHAR(32) NOT NULL DEFAULT 'PSLE',
@@ -21,6 +34,8 @@ CREATE TABLE IF NOT EXISTS questions (
   status VARCHAR(32) NOT NULL DEFAULT 'draft',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_questions_student_code (student_id, code),
+  INDEX idx_questions_student_id (student_id),
   INDEX idx_questions_subject (subject),
   INDEX idx_questions_status (status),
   INDEX idx_questions_updated_at (updated_at)
@@ -40,19 +55,22 @@ CREATE TABLE IF NOT EXISTS question_attempts (
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
-  setting_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  student_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  setting_key VARCHAR(64) NOT NULL,
   setting_value TEXT NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (student_id, setting_key)
 );
 
-INSERT INTO app_settings (setting_key, setting_value)
-VALUES ('prompt_template', '')
+INSERT INTO app_settings (student_id, setting_key, setting_value)
+VALUES (1, 'prompt_template', '')
 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
 
-INSERT INTO questions (code, title, subject, grade_level, difficulty, question_type, topic, tags, reminder_word, example_sentence, option_items, stem, answer, analysis, status)
+INSERT INTO questions (student_id, code, title, subject, grade_level, difficulty, question_type, topic, tags, reminder_word, example_sentence, option_items, stem, answer, analysis, status)
 VALUES
   (
+    1,
     'MATH-2026-001',
     '分数加法基础题',
     'Mathematics',
@@ -70,6 +88,7 @@ VALUES
     'published'
   ),
   (
+    1,
     'CHN-2026-001',
     '阅读理解主旨题',
     'Chinese',
@@ -87,6 +106,7 @@ VALUES
     'draft'
   ),
   (
+    1,
     'ENG-2026-001',
     'Grammar Error Correction',
     'English',
@@ -104,6 +124,7 @@ VALUES
     'published'
   ),
   (
+    1,
     'SCI-2026-001',
     '植物生长条件判断',
     'Science',
@@ -122,10 +143,10 @@ VALUES
   );
 
 INSERT INTO question_attempts (question_id, answer_text, source, attempt_no)
-SELECT id, '3/4', 'seed_original', 1 FROM questions WHERE code = 'MATH-2026-001'
+SELECT id, '3/4', 'seed_original', 1 FROM questions WHERE student_id = 1 AND code = 'MATH-2026-001'
 UNION ALL
-SELECT id, '作者想告诉我们要从人物和事件中归纳中心思想。', 'seed_original', 1 FROM questions WHERE code = 'CHN-2026-001'
+SELECT id, '作者想告诉我们要从人物和事件中归纳中心思想。', 'seed_original', 1 FROM questions WHERE student_id = 1 AND code = 'CHN-2026-001'
 UNION ALL
-SELECT id, 'Students should goes to school every day.', 'seed_original', 1 FROM questions WHERE code = 'ENG-2026-001'
+SELECT id, 'Students should goes to school every day.', 'seed_original', 1 FROM questions WHERE student_id = 1 AND code = 'ENG-2026-001'
 UNION ALL
-SELECT id, '阳光、水和空气。', 'seed_original', 1 FROM questions WHERE code = 'SCI-2026-001';
+SELECT id, '阳光、水和空气。', 'seed_original', 1 FROM questions WHERE student_id = 1 AND code = 'SCI-2026-001';

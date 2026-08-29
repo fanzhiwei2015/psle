@@ -3,6 +3,7 @@ package settings
 import (
 	"encoding/json"
 	"net/http"
+        "strconv"
 	"strings"
 )
 
@@ -20,7 +21,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 }
 
 func (h *Handler) getPromptSettings(w http.ResponseWriter, r *http.Request) {
-	settings, err := h.repo.GetPromptSettings(r.Context())
+        settings, err := h.repo.GetPromptSettings(r.Context(), parseStudentID(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get prompt settings")
 		return
@@ -38,7 +39,7 @@ func (h *Handler) savePromptSettings(w http.ResponseWriter, r *http.Request) {
 
 	input.PromptTemplate = strings.TrimSpace(input.PromptTemplate)
 
-	settings, err := h.repo.SavePromptSettings(r.Context(), input)
+        settings, err := h.repo.SavePromptSettings(r.Context(), parseStudentID(r), input)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save prompt settings")
 		return
@@ -55,4 +56,12 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func parseStudentID(r *http.Request) int64 {
+        studentID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("studentId")), 10, 64)
+        if err != nil || studentID <= 0 {
+                return 1
+        }
+        return studentID
 }

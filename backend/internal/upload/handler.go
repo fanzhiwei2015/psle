@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+        "strconv"
 	"slices"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ type Handler struct {
 }
 
 type Item struct {
+        StudentID int64  `json:"studentId"`
 	Name      string `json:"name"`
 	Subject   string `json:"subject"`
 	URL       string `json:"url"`
@@ -61,6 +63,7 @@ type Item struct {
 }
 
 type HistoryItem struct {
+        StudentID int64  `json:"studentId"`
 	ID        string `json:"id"`
 	Subject   string `json:"subject"`
 	BatchID   string `json:"batchId"`
@@ -90,6 +93,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 }
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
+        studentID := parseStudentID(r)
 	subject, subjectKey, ok := parseSubject(w, r)
 	if !ok {
 		return
@@ -113,7 +117,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDir := filepath.Join(h.rootDir, subjectKey)
+        targetDir := filepath.Join(h.rootDir, "students", strconv.FormatInt(studentID, 10), subjectKey)
 	err := os.MkdirAll(targetDir, 0o755)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create upload directory")
@@ -140,9 +144,10 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		storedName := buildStoredName(batchID, filename)
 		targetPath := filepath.Join(targetDir, storedName)
 		item := Item{
+                        StudentID: studentID,
 			Name:      storedName,
 			Subject:   subject,
-			URL:       fmt.Sprintf("/uploads/%s/%s", subjectKey, storedName),
+                        URL:       fmt.Sprintf("/uploads/students/%d/%s/%s", studentID, subjectKey, storedName),
 			CreatedAt: createdAt,
 		}
 
@@ -163,7 +168,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	response := uploadResponse{Items: items}
 	displayItems := items
 	if len(savedPaths) > 1 {
-		combinedItems, err := h.createCombinedImages(subject, subjectKey, targetDir, batchID, createdAt, savedPaths)
+                combinedItems, err := h.createCombinedImages(studentID, subject, subjectKey, targetDir, batchID, createdAt, savedPaths)
 		if err != nil {
 			log.Printf("create combined image failed for subject=%s: %v", subject, err)
 			writeError(w, http.StatusInternalServerError, "failed to create combined image")
@@ -174,13 +179,14 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	historyItem := HistoryItem{
+                StudentID: studentID,
 		ID:        batchID,
 		Subject:   subject,
 		BatchID:   batchID,
 		CreatedAt: createdAt,
 	}
 	if len(displayItems) > 0 {
-		historyItem.Href = fmt.Sprintf("/gallery?subject=%s&batch=%s", subject, batchID)
+                historyItem.Href = fmt.Sprintf("/gallery?subject=%s&studentId=%d&batch=%s", subject, studentID, batchID)
 	}
 	if err := appendHistory(targetDir, historyItem); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save upload history")
@@ -192,24 +198,25 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+        studentID := parseStudentID(r)
 	subject, subjectKey, ok := parseSubject(w, r)
 	if !ok {
 		return
 	}
 
-	targetDir := filepath.Join(h.rootDir, subjectKey)
+        targetDir := filepath.Join(h.rootDir, "students", strconv.FormatInt(studentID, 10), subjectKey)
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare upload directory")
 		return
 	}
 
 	batchID := strings.TrimSpace(r.URL.Query().Get("batch"))
-	items, err := listDisplayItems(subject, subjectKey, targetDir, batchID)
+        items, err := listDisplayItems(studentID, subject, subjectKey, targetDir, batchID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list uploads")
 		return
 	}
-	history, err := readHistory(targetDir, subject, subjectKey)
+        history, err := readHistory(targetDir, studentID, subject, subjectKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list upload history")
 		return
@@ -232,16 +239,16 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listResponse{Items: items, History: history})
 }
 
-func listDisplayItems(subject, subjectKey, targetDir, batchID string) ([]Item, error) {
+func listDisplayItems(studentID int64, subject, subjectKey, targetDir, batchID string) ([]Item, error) {
 	combinedDir := filepath.Join(targetDir, "combined")
-	if combinedItems, err := listItemsFromDir(subject, filepath.Join(subjectKey, "combined"), combinedDir, batchID); err == nil && len(combinedItems) > 0 {
+        if combinedItems, err := listItemsFromDir(studentID, subject, filepath.Join("students", strconv.FormatInt(studentID, 10), subjectKey, "combined"), combinedDir, batchID); err == nil && len(combinedItems) > 0 {
 		return combinedItems, nil
 	}
 
-	return listItemsFromDir(subject, subjectKey, targetDir, batchID)
+        return listItemsFromDir(studentID, subject, filepath.Join("students", strconv.FormatInt(studentID, 10), subjectKey), targetDir, batchID)
 }
 
-func listItemsFromDir(subject, urlPath, dir, batchID string) ([]Item, error) {
+func listItemsFromDir(studentID int64, subject, urlPath, dir, batchID string) ([]Item, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -268,6 +275,7 @@ func listItemsFromDir(subject, urlPath, dir, batchID string) ([]Item, error) {
 		}
 
 		items = append(items, Item{
+                        StudentID: studentID,
 			Name:      entry.Name(),
 			Subject:   subject,
 			URL:       fmt.Sprintf("/uploads/%s/%s", urlPath, entry.Name()),
@@ -295,6 +303,14 @@ func parseSubject(w http.ResponseWriter, r *http.Request) (string, string, bool)
 		return "", "", false
 	}
 	return subject, subjectKey, true
+}
+
+func parseStudentID(r *http.Request) int64 {
+        studentID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("studentId")), 10, 64)
+        if err != nil || studentID <= 0 {
+                return 1
+        }
+        return studentID
 }
 
 func validateFile(header *multipart.FileHeader) (string, error) {
@@ -489,7 +505,7 @@ func buildStoredName(batchID, name string) string {
 	return fmt.Sprintf("%s-%s%s", batchID, base, ext)
 }
 
-func (h *Handler) createCombinedImages(subject, subjectKey, targetDir, batchID, createdAt string, savedPaths []string) ([]Item, error) {
+func (h *Handler) createCombinedImages(studentID int64, subject, subjectKey, targetDir, batchID, createdAt string, savedPaths []string) ([]Item, error) {
 	if len(savedPaths) == 0 {
 		return nil, nil
 	}
@@ -497,7 +513,7 @@ func (h *Handler) createCombinedImages(subject, subjectKey, targetDir, batchID, 
 	items := make([]Item, 0, (len(savedPaths)+maxCombineChunkCount-1)/maxCombineChunkCount)
 	for start := 0; start < len(savedPaths); start += maxCombineChunkCount {
 		end := min(start+maxCombineChunkCount, len(savedPaths))
-		partItems, err := h.createCombinedChunk(subject, subjectKey, targetDir, batchID, createdAt, savedPaths[start:end], len(items)+1)
+                partItems, err := h.createCombinedChunk(studentID, subject, subjectKey, targetDir, batchID, createdAt, savedPaths[start:end], len(items)+1)
 		if err != nil {
 			return nil, err
 		}
@@ -507,7 +523,7 @@ func (h *Handler) createCombinedImages(subject, subjectKey, targetDir, batchID, 
 	return items, nil
 }
 
-func (h *Handler) createCombinedChunk(subject, subjectKey, targetDir, batchID, createdAt string, savedPaths []string, part int) ([]Item, error) {
+func (h *Handler) createCombinedChunk(studentID int64, subject, subjectKey, targetDir, batchID, createdAt string, savedPaths []string, part int) ([]Item, error) {
 	images := make([]image.Image, 0, len(savedPaths))
 	maxWidth := 0
 	totalHeight := 0
@@ -571,11 +587,11 @@ func (h *Handler) createCombinedChunk(subject, subjectKey, targetDir, batchID, c
 		}
 
 		mid := len(savedPaths) / 2
-		left, err := h.createCombinedChunk(subject, subjectKey, targetDir, batchID, createdAt, savedPaths[:mid], part*10)
+                left, err := h.createCombinedChunk(studentID, subject, subjectKey, targetDir, batchID, createdAt, savedPaths[:mid], part*10)
 		if err != nil {
 			return nil, err
 		}
-		right, err := h.createCombinedChunk(subject, subjectKey, targetDir, batchID, createdAt, savedPaths[mid:], part*10+1)
+                right, err := h.createCombinedChunk(studentID, subject, subjectKey, targetDir, batchID, createdAt, savedPaths[mid:], part*10+1)
 		if err != nil {
 			return nil, err
 		}
@@ -590,9 +606,10 @@ func (h *Handler) createCombinedChunk(subject, subjectKey, targetDir, batchID, c
 	}
 
 	return []Item{{
+                StudentID: studentID,
 		Name:      filename,
 		Subject:   subject,
-		URL:       fmt.Sprintf("/uploads/%s/combined/%s", subjectKey, filename),
+                URL:       fmt.Sprintf("/uploads/students/%d/%s/combined/%s", studentID, subjectKey, filename),
 		CreatedAt: createdAt,
 	}}, nil
 }
@@ -644,7 +661,7 @@ func appendHistory(targetDir string, item HistoryItem) error {
 	return json.NewEncoder(file).Encode(item)
 }
 
-func readHistory(targetDir, subject, subjectKey string) ([]HistoryItem, error) {
+func readHistory(targetDir string, studentID int64, subject, subjectKey string) ([]HistoryItem, error) {
 	history := make([]HistoryItem, 0)
 	file, err := os.Open(filepath.Join(targetDir, uploadHistoryFileName))
 	if err != nil {
@@ -671,8 +688,11 @@ func readHistory(targetDir, subject, subjectKey string) ([]HistoryItem, error) {
 			if item.Subject == "" {
 				item.Subject = subject
 			}
+                        if item.StudentID <= 0 {
+                                item.StudentID = studentID
+                        }
 			if item.Href == "" && item.BatchID != "" {
-				item.Href = fmt.Sprintf("/gallery?subject=%s&batch=%s", item.Subject, item.BatchID)
+                                item.Href = fmt.Sprintf("/gallery?subject=%s&studentId=%d&batch=%s", item.Subject, item.StudentID, item.BatchID)
 			}
 			history = append(history, item)
 		}
@@ -685,7 +705,7 @@ func readHistory(targetDir, subject, subjectKey string) ([]HistoryItem, error) {
 		}
 	}
 
-	displayItems, err := listDisplayItems(subject, subjectKey, targetDir, "")
+        displayItems, err := listDisplayItems(studentID, subject, subjectKey, targetDir, "")
 	if err != nil {
 		return nil, err
 	}
@@ -698,11 +718,12 @@ func readHistory(targetDir, subject, subjectKey string) ([]HistoryItem, error) {
 			continue
 		}
 		history = append(history, HistoryItem{
+                        StudentID: studentID,
 			ID:        batchID,
 			Subject:   subject,
 			BatchID:   batchID,
 			CreatedAt: item.CreatedAt,
-			Href:      fmt.Sprintf("/gallery?subject=%s&batch=%s", subject, batchID),
+                        Href:      fmt.Sprintf("/gallery?subject=%s&studentId=%d&batch=%s", subject, studentID, batchID),
 		})
 		existingBatchIDs[batchID] = struct{}{}
 	}

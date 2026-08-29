@@ -16,6 +16,7 @@ import (
 
 	"github.com/bytedance/psle/backend/internal/question"
 	"github.com/bytedance/psle/backend/internal/settings"
+	"github.com/bytedance/psle/backend/internal/student"
 	"github.com/bytedance/psle/backend/internal/upload"
 )
 
@@ -30,6 +31,11 @@ func main() {
 		log.Fatalf("ping db: %v", err)
 	}
 
+	studentRepo := student.NewRepository(db)
+	if err := studentRepo.EnsureSchema(context.Background()); err != nil {
+		log.Fatalf("ensure student schema: %v", err)
+	}
+
 	settingsRepo := settings.NewRepository(db)
 	if err := settingsRepo.EnsureSchema(context.Background()); err != nil {
 		log.Fatalf("ensure settings schema: %v", err)
@@ -40,7 +46,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	registerRoutes(mux, questionRepo, settingsRepo)
+	registerRoutes(mux, studentRepo, questionRepo, settingsRepo)
 
 	server := &http.Server{
 		Addr:              ":" + getEnv("APP_PORT", "8080"),
@@ -67,7 +73,8 @@ func main() {
 	}
 }
 
-func registerRoutes(mux *http.ServeMux, questionRepo *question.Repository, settingsRepo *settings.Repository) {
+func registerRoutes(mux *http.ServeMux, studentRepo *student.Repository, questionRepo *question.Repository, settingsRepo *settings.Repository) {
+	student.NewHandler(studentRepo).Register(mux)
 	handler := question.NewHandler(questionRepo)
 	handler.Register(mux)
 	upload.NewHandler(getUploadRoot()).Register(mux)

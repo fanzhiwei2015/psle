@@ -23,6 +23,9 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 func (r *Repository) EnsureSchema(ctx context.Context) error {
+        if err := ensureColumn(ctx, r.db, "questions", "student_id", "ALTER TABLE questions ADD COLUMN student_id BIGINT UNSIGNED NOT NULL DEFAULT 1 FIRST"); err != nil {
+                return fmt.Errorf("ensure questions.student_id schema: %w", err)
+        }
 	if err := ensureColumn(ctx, r.db, "questions", "topic", "ALTER TABLE questions ADD COLUMN topic VARCHAR(255) NOT NULL DEFAULT '' AFTER question_type"); err != nil {
 		return fmt.Errorf("ensure questions.topic schema: %w", err)
 	}
@@ -38,6 +41,12 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if err := ensureColumn(ctx, r.db, "questions", "option_items", "ALTER TABLE questions ADD COLUMN option_items TEXT NOT NULL AFTER example_sentence"); err != nil {
 		return fmt.Errorf("ensure questions.option_items schema: %w", err)
 	}
+        if _, err := r.db.ExecContext(ctx, "UPDATE questions SET student_id = 1 WHERE student_id IS NULL OR student_id = 0"); err != nil {
+                return fmt.Errorf("backfill questions.student_id: %w", err)
+        }
+        if err := ensureQuestionsStudentIndexes(ctx, r.db); err != nil {
+                return fmt.Errorf("ensure questions student indexes: %w", err)
+        }
 
 	questionAttemptsTable := `CREATE TABLE IF NOT EXISTS question_attempts (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -64,6 +73,13 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 func (r *Repository) List(ctx context.Context, filter ListFilter) ([]Question, error) {
 	args := make([]any, 0, 4)
 	conditions := make([]string, 0, 4)
+
+        studentID := filter.StudentID
+        if studentID <= 0 {
+                studentID = 1
+        }
+        conditions = append(conditions, "student_id = ?")
+        args = append(args, studentID)
 
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		conditions = append(conditions, "(code LIKE ? OR title LIKE ? OR stem LIKE ? OR topic LIKE ?)")
@@ -111,9 +127,9 @@ func (r *Repository) List(ctx context.Context, filter ListFilter) ([]Question, e
 	return questions, nil
 }
 
-func (r *Repository) GetByID(ctx context.Context, id int64) (Question, error) {
-	query := questionSelectSQL() + " WHERE q.id = ?"
-	row := r.db.QueryRowContext(ctx, query, id)
+func (r *Repository) GetByID(ctx context.Context, studentID, id int64) (Question, error) {
+        query := questionSelectSQL() + " WHERE q.student_id = ? AND q.id = ?"
+        row := r.db.QueryRowContext(ctx, query, normalizeStudentID(studentID), id)
 	q, err := scanQuestion(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -125,9 +141,9 @@ func (r *Repository) GetByID(ctx context.Context, id int64) (Question, error) {
 	return q, nil
 }
 
-func (r *Repository) Create(ctx context.Context, input SaveQuestionInput) (Question, error) {
-	query := `INSERT INTO questions (code, title, subject, grade_level, difficulty, question_type, topic, tags, reminder_word, example_sentence, option_items, stem, answer, analysis, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+func (r *Repository) Create(ctx context.Context, studentID int64, input SaveQuestionInput) (Question, error) {
+        query := `INSERT INTO questions (student_id, code, title, subject, grade_level, difficulty, question_type, topic, tags, reminder_word, example_sentence, option_items, stem, answer, analysis, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	tagsValue, err := encodeTags(input.Tags)
 	if err != nil {
 		return Question{}, fmt.Errorf("encode tags: %w", err)
@@ -137,6 +153,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		return Question{}, fmt.Errorf("encode option items: %w", err)
 	}
 	result, err := r.db.ExecContext(ctx, query,
+                normalizeStudentID(studentID),
 		input.Code,
 		input.Title,
 		input.Subject,
@@ -162,10 +179,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		return Question{}, fmt.Errorf("last insert id: %w", err)
 	}
 
-	return r.GetByID(ctx, id)
+        return r.GetByID(ctx, studentID, id)
 }
 
-func (r *Repository) Update(ctx context.Context, id int64, input SaveQuestionInput) (Question, error) {
+func (r *Repository) Update(ctx context.Context, studentID, id int64, input SaveQuestionInput) (Question, error) {
 	tagsValue, err := encodeTags(input.Tags)
 	if err != nil {
 		return Question{}, fmt.Errorf("encode tags: %w", err)
@@ -174,9 +191,9 @@ func (r *Repository) Update(ctx context.Context, id int64, input SaveQuestionInp
 	if err != nil {
 		return Question{}, fmt.Errorf("encode option items: %w", err)
 	}
-	query := `UPDATE questions
+        query := `UPDATE questions
 SET code = ?, title = ?, subject = ?, grade_level = ?, difficulty = ?, question_type = ?, topic = ?, tags = ?, reminder_word = ?, example_sentence = ?, option_items = ?, stem = ?, answer = ?, analysis = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-WHERE id = ?`
+WHERE student_id = ? AND id = ?`
 	result, err := r.db.ExecContext(ctx, query,
 		input.Code,
 		input.Title,
@@ -193,7 +210,8 @@ WHERE id = ?`
 		input.Answer,
 		input.Analysis,
 		input.Status,
-		id,
+                normalizeStudentID(studentID),
+                id,
 	)
 	if err != nil {
 		return Question{}, fmt.Errorf("update question: %w", err)
@@ -207,11 +225,18 @@ WHERE id = ?`
 		return Question{}, ErrNotFound
 	}
 
-	return r.GetByID(ctx, id)
+        question, err := r.GetByID(ctx, studentID, id)
+        if err != nil {
+                return Question{}, err
+        }
+        if question.ID == 0 {
+                return Question{}, ErrNotFound
+        }
+        return question, nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id int64) error {
-	result, err := r.db.ExecContext(ctx, "DELETE FROM questions WHERE id = ?", id)
+func (r *Repository) Delete(ctx context.Context, studentID, id int64) error {
+        result, err := r.db.ExecContext(ctx, "DELETE FROM questions WHERE student_id = ? AND id = ?", normalizeStudentID(studentID), id)
 	if err != nil {
 		return fmt.Errorf("delete question: %w", err)
 	}
@@ -227,7 +252,7 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *Repository) UpdateTags(ctx context.Context, id int64, tags []string) (Question, error) {
+func (r *Repository) UpdateTags(ctx context.Context, studentID, id int64, tags []string) (Question, error) {
 	tagsValue, err := encodeTags(tags)
 	if err != nil {
 		return Question{}, fmt.Errorf("encode tags: %w", err)
@@ -235,7 +260,7 @@ func (r *Repository) UpdateTags(ctx context.Context, id int64, tags []string) (Q
 
 	result, err := r.db.ExecContext(ctx, `UPDATE questions
 SET tags = ?, updated_at = CURRENT_TIMESTAMP
-WHERE id = ?`, tagsValue, id)
+WHERE student_id = ? AND id = ?`, tagsValue, normalizeStudentID(studentID), id)
 	if err != nil {
 		return Question{}, fmt.Errorf("update question tags: %w", err)
 	}
@@ -248,10 +273,14 @@ WHERE id = ?`, tagsValue, id)
 		return Question{}, ErrNotFound
 	}
 
-	return r.GetByID(ctx, id)
+        question, err := r.GetByID(ctx, studentID, id)
+        if err != nil {
+                return Question{}, err
+        }
+        return question, nil
 }
 
-func (r *Repository) Import(ctx context.Context, inputs []ImportQuestionInput) (ImportResult, error) {
+func (r *Repository) Import(ctx context.Context, studentID int64, inputs []ImportQuestionInput) (ImportResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("begin import tx: %w", err)
@@ -283,7 +312,7 @@ func (r *Repository) Import(ctx context.Context, inputs []ImportQuestionInput) (
 			Status:          "draft",
 		}
 
-		questionID, createErr := r.createQuestionTx(ctx, tx, saveInput)
+                questionID, createErr := r.createQuestionTx(ctx, tx, studentID, saveInput)
 		if createErr != nil {
 			err = createErr
 			return ImportResult{}, err
@@ -296,7 +325,7 @@ func (r *Repository) Import(ctx context.Context, inputs []ImportQuestionInput) (
 			}
 		}
 
-		question, getErr := r.getByIDTx(ctx, tx, questionID)
+                question, getErr := r.getByIDTx(ctx, tx, normalizeStudentID(studentID), questionID)
 		if getErr != nil {
 			err = getErr
 			return ImportResult{}, err
@@ -314,9 +343,9 @@ func (r *Repository) Import(ctx context.Context, inputs []ImportQuestionInput) (
 	}, nil
 }
 
-func (r *Repository) createQuestionTx(ctx context.Context, tx *sql.Tx, input SaveQuestionInput) (int64, error) {
-	query := `INSERT INTO questions (code, title, subject, grade_level, difficulty, question_type, topic, tags, reminder_word, example_sentence, option_items, stem, answer, analysis, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+func (r *Repository) createQuestionTx(ctx context.Context, tx *sql.Tx, studentID int64, input SaveQuestionInput) (int64, error) {
+        query := `INSERT INTO questions (student_id, code, title, subject, grade_level, difficulty, question_type, topic, tags, reminder_word, example_sentence, option_items, stem, answer, analysis, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	tagsValue, err := encodeTags(input.Tags)
 	if err != nil {
 		return 0, fmt.Errorf("encode tags: %w", err)
@@ -326,6 +355,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		return 0, fmt.Errorf("encode option items: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, query,
+                normalizeStudentID(studentID),
 		input.Code,
 		input.Title,
 		input.Subject,
@@ -368,8 +398,8 @@ VALUES (?, ?, ?, ?, ?)`, questionID, answerText, source, attemptNo, isCorrectVal
 	return nil
 }
 
-func (r *Repository) getByIDTx(ctx context.Context, tx *sql.Tx, id int64) (Question, error) {
-	row := tx.QueryRowContext(ctx, questionSelectSQL()+" WHERE q.id = ?", id)
+func (r *Repository) getByIDTx(ctx context.Context, tx *sql.Tx, studentID, id int64) (Question, error) {
+        row := tx.QueryRowContext(ctx, questionSelectSQL()+" WHERE q.student_id = ? AND q.id = ?", normalizeStudentID(studentID), id)
 	q, err := scanQuestion(row)
 	if err != nil {
 		return Question{}, fmt.Errorf("query imported question: %w", err)
@@ -378,7 +408,7 @@ func (r *Repository) getByIDTx(ctx context.Context, tx *sql.Tx, id int64) (Quest
 	return q, nil
 }
 
-func (r *Repository) SubmitAttempt(ctx context.Context, id int64, input SubmitAttemptInput) (SubmitAttemptResult, error) {
+func (r *Repository) SubmitAttempt(ctx context.Context, studentID, id int64, input SubmitAttemptInput) (SubmitAttemptResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SubmitAttemptResult{}, fmt.Errorf("begin attempt tx: %w", err)
@@ -389,7 +419,7 @@ func (r *Repository) SubmitAttempt(ctx context.Context, id int64, input SubmitAt
 		}
 	}()
 
-	question, err := r.getByIDTx(ctx, tx, id)
+        question, err := r.getByIDTx(ctx, tx, studentID, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return SubmitAttemptResult{}, ErrNotFound
@@ -412,7 +442,7 @@ func (r *Repository) SubmitAttempt(ctx context.Context, id int64, input SubmitAt
 		return SubmitAttemptResult{}, err
 	}
 
-	updatedQuestion, err := r.getByIDTx(ctx, tx, id)
+        updatedQuestion, err := r.getByIDTx(ctx, tx, studentID, id)
 	if err != nil {
 		return SubmitAttemptResult{}, err
 	}
@@ -430,8 +460,8 @@ func (r *Repository) SubmitAttempt(ctx context.Context, id int64, input SubmitAt
 	}, nil
 }
 
-func (r *Repository) EssayWordStats(ctx context.Context, id int64) (EssayWordStatsResult, error) {
-	question, err := r.GetByID(ctx, id)
+func (r *Repository) EssayWordStats(ctx context.Context, studentID, id int64) (EssayWordStatsResult, error) {
+        question, err := r.GetByID(ctx, studentID, id)
 	if err != nil {
 		return EssayWordStatsResult{}, err
 	}
@@ -888,6 +918,69 @@ WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, tableNa
 
 	_, err = db.ExecContext(ctx, alterSQL)
 	return err
+}
+
+func normalizeStudentID(studentID int64) int64 {
+	if studentID <= 0 {
+		return 1
+	}
+	return studentID
+}
+
+func ensureQuestionsStudentIndexes(ctx context.Context, db *sql.DB) error {
+	var hasStudentIndex int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*)
+FROM information_schema.statistics
+WHERE table_schema = DATABASE() AND table_name = 'questions' AND index_name = 'idx_questions_student_id'`).Scan(&hasStudentIndex); err != nil {
+		return err
+	}
+	if hasStudentIndex == 0 {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE questions ADD INDEX idx_questions_student_id (student_id)"); err != nil {
+			return err
+		}
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT index_name, COUNT(*) AS column_count
+FROM information_schema.statistics
+WHERE table_schema = DATABASE() AND table_name = 'questions' AND non_unique = 0
+GROUP BY index_name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	singleCodeIndexes := make([]string, 0)
+	hasScopedUnique := false
+	for rows.Next() {
+		var indexName string
+		var columnCount int
+		if err := rows.Scan(&indexName, &columnCount); err != nil {
+			return err
+		}
+		if indexName == "uq_questions_student_code" {
+			hasScopedUnique = true
+		}
+		if indexName == "code" && columnCount == 1 {
+			singleCodeIndexes = append(singleCodeIndexes, indexName)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, indexName := range singleCodeIndexes {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE questions DROP INDEX %s", indexName)); err != nil {
+			return err
+		}
+	}
+
+	if !hasScopedUnique {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE questions ADD UNIQUE KEY uq_questions_student_code (student_id, code)"); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func buildImportCode(subject string, batchTime time.Time, index int) string {

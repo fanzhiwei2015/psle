@@ -1,4 +1,4 @@
-import { ChangeEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Question = {
   id: number;
@@ -26,32 +26,6 @@ type SubjectMeta = {
   label: string;
   value: string;
   aliases: string[];
-};
-
-type UploadItem = {
-  name: string;
-  subject: string;
-  url: string;
-  createdAt: string;
-};
-
-type UploadResponse = {
-  items: UploadItem[];
-  combinedItems?: UploadItem[];
-  history?: UploadLink;
-};
-
-type UploadLink = {
-  id: string;
-  subject: string;
-  createdAt: string;
-  batchId?: string;
-  href?: string;
-};
-
-type UploadListResponse = {
-  items: UploadItem[];
-  history?: UploadLink[];
 };
 
 type PromptSettingsResponse = {
@@ -118,7 +92,18 @@ type EssayWordStatsResponse = {
   items: EssayWordStat[];
 };
 
-const uploadLinksStorageKey = "psle-upload-links";
+type Student = {
+  id: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type StudentListResponse = {
+  items: Student[];
+};
+
+const activeStudentStorageKey = "psle-active-student-id";
 
 const subjectTabs: SubjectMeta[] = [
   { key: "english", label: "English", value: "English", aliases: ["English"] },
@@ -160,6 +145,10 @@ function getInitialQuestionType() {
   return readQuestionTypeFromLocation(readSubjectFromLocation());
 }
 
+function getInitialStudentId() {
+  return readStudentIdFromLocation();
+}
+
 function isGalleryPage() {
   return window.location.pathname === "/gallery";
 }
@@ -172,35 +161,19 @@ function isSettingsPage() {
   return window.location.pathname === "/settings";
 }
 
-function buildHomeHref(subject: string, questionType?: string) {
+function buildHomeHref(subject: string, questionType?: string, studentId?: number) {
   const params = new URLSearchParams({ subject });
+  params.set("studentId", String(studentId && studentId > 0 ? studentId : 1));
   if (questionType) {
     params.set("questionType", questionType);
   }
   return `/?${params.toString()}`;
 }
 
-function buildGalleryHref(subject: string, batchId?: string) {
-  const params = new URLSearchParams({ subject });
-  if (batchId) {
-    params.set("batch", batchId);
-  }
-  return `/gallery?${params.toString()}`;
-}
-
-function buildViewerHref(subject: string, startIndex?: number, count?: number) {
-  const params = new URLSearchParams({ subject });
-  if (typeof startIndex === "number") {
-    params.set("start", String(startIndex));
-  }
-  if (typeof count === "number") {
-    params.set("count", String(count));
-  }
-  return `/viewer?${params.toString()}`;
-}
-
-function buildSettingsHref() {
-  return "/settings";
+function buildSettingsHref(studentId?: number) {
+  const params = new URLSearchParams();
+  params.set("studentId", String(studentId && studentId > 0 ? studentId : 1));
+  return `/settings?${params.toString()}`;
 }
 
 function readSubjectFromLocation() {
@@ -213,6 +186,39 @@ function readQuestionTypeFromLocation(subject: string) {
     return questionType;
   }
   return subject === "English" ? "english_word_reminder" : "";
+}
+
+function readStudentIdFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("studentId");
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  const stored = window.localStorage.getItem(activeStudentStorageKey);
+  if (stored) {
+    const parsed = Number(stored);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return 1;
+}
+
+function buildApiUrl(path: string, studentId: number, query?: Record<string, string | number | undefined | null>) {
+  const params = new URLSearchParams();
+  params.set("studentId", String(studentId > 0 ? studentId : 1));
+  Object.entries(query ?? {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+    params.set(key, String(value));
+  });
+  return `${apiBase}${path}?${params.toString()}`;
 }
 
 function formatDateTime(value: string) {
@@ -719,21 +725,6 @@ function getImportPlaceholder(subject: string) {
 ]`;
 }
 
-function mergeUploadLinks(...groups: UploadLink[][]) {
-  const merged = new Map<string, UploadLink>();
-  groups.flat().forEach((item) => {
-    const key = `${item.subject}|${item.batchId ?? ""}|${item.href ?? ""}|${item.createdAt}`;
-    merged.set(key, item);
-  });
-
-  return Array.from(merged.values()).sort((a, b) => {
-    if (a.createdAt === b.createdAt) {
-      return (b.id || "").localeCompare(a.id || "");
-    }
-    return b.createdAt.localeCompare(a.createdAt);
-  });
-}
-
 function getImportStatusHint(subjectLabel: string) {
   return `Paste ${subjectLabel} JSON here to validate before importing. The examples use English field names by default. If \`subject\` is missing, the current page subject will be used automatically. Chinese field names are still supported.`;
 }
@@ -743,20 +734,19 @@ export default function App() {
   const viewerMode = isViewerPage();
   const settingsMode = isSettingsPage();
 
+  const [students, setStudents] = useState<Student[]>([]);
+  const [activeStudentId, setActiveStudentId] = useState(getInitialStudentId);
+  const [studentLoading, setStudentLoading] = useState(false);
+  const [studentCreating, setStudentCreating] = useState(false);
+  const [studentMenuOpen, setStudentMenuOpen] = useState(false);
   const [activeSubject, setActiveSubject] = useState(getInitialSubject);
   const [items, setItems] = useState<Question[]>([]);
-  const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [keyword, setKeyword] = useState("");
   const [status, setStatus] = useState("");
   const [activeQuestionType, setActiveQuestionType] = useState(getInitialQuestionType);
   const [activeTag, setActiveTag] = useState("");
   const [loading, setLoading] = useState(false);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState("Loading question bank...");
-  const [uploadLinks, setUploadLinks] = useState<UploadLink[]>([]);
-  const [pendingUploadSubject, setPendingUploadSubject] = useState<string | null>(null);
-  const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [promptTemplate, setPromptTemplate] = useState("");
   const [savedPromptTemplate, setSavedPromptTemplate] = useState<string | null>(null);
   const [promptUpdatedAt, setPromptUpdatedAt] = useState<string | null>(null);
@@ -802,52 +792,23 @@ export default function App() {
   const [tagDraft, setTagDraft] = useState("");
   const [tagSaving, setTagSaving] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const uploadMenuRef = useRef<HTMLDivElement | null>(null);
   const essayListSpeechMenuRef = useRef<HTMLDivElement | null>(null);
   const practiceSpeechMenuRef = useRef<HTMLDivElement | null>(null);
   const essayStemRef = useRef<HTMLDivElement | null>(null);
   const essaySelectionRangeRef = useRef<Range | null>(null);
   const practiceEssayUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const essayListSpeechTimerRef = useRef<number | null>(null);
+  const studentMenuCloseTimerRef = useRef<number | null>(null);
   const speechRestartTimerRef = useRef<number | null>(null);
-  const viewerRangeRef = useRef<{ start: number; count: number } | null>(
-    (() => {
-      const params = new URLSearchParams(window.location.search);
-      const startRaw = params.get("start");
-      const countRaw = params.get("count");
-      if (!startRaw || !countRaw) {
-        return null;
-      }
-
-      const start = Number(startRaw);
-      const count = Number(countRaw);
-      if (Number.isNaN(start) || Number.isNaN(count) || start < 0 || count <= 0) {
-        return null;
-      }
-
-      return { start, count };
-    })()
-  );
-  const viewerCombinedRef = useRef<{ url: string; createdAt: string } | null>(
-    (() => {
-      const params = new URLSearchParams(window.location.search);
-      const url = params.get("combined");
-      if (!url) {
-        return null;
-      }
-
-      return {
-        url,
-        createdAt: params.get("createdAt") ?? new Date().toISOString()
-      };
-    })()
-  );
-  const galleryBatchRef = useRef<string | null>(new URLSearchParams(window.location.search).get("batch"));
 
   const activeSubjectMeta = useMemo(
     () => subjectTabs.find((item) => item.value === activeSubject) ?? subjectTabs[0],
     [activeSubject]
+  );
+
+  const activeStudent = useMemo(
+    () => students.find((item) => item.id === activeStudentId) ?? null,
+    [activeStudentId, students]
   );
 
   const subjectItems = useMemo(
@@ -924,57 +885,39 @@ export default function App() {
     return activeQuestionType === "" || activeQuestionType === "english_word_reminder";
   }, [activeQuestionType, activeSubject]);
 
-  const viewerGroups = useMemo(() => {
-    if (!viewerMode) {
-      return [];
-    }
-
-    if (viewerCombinedRef.current) {
-      return [
-        [
-          {
-            name: "combined-image",
-            subject: activeSubject,
-            url: viewerCombinedRef.current.url,
-            createdAt: viewerCombinedRef.current.createdAt
-          }
-        ]
-      ];
-    }
-
-    const scopedUploads = viewerRangeRef.current
-      ? uploads.slice(viewerRangeRef.current.start, viewerRangeRef.current.start + viewerRangeRef.current.count)
-      : uploads;
-
-    if (scopedUploads.length > 10) {
-      const groups: UploadItem[][] = [];
-      for (let index = 0; index < scopedUploads.length; index += 2) {
-        groups.push(scopedUploads.slice(index, index + 2));
-      }
-      return groups;
-    }
-
-    return scopedUploads.map((item) => [item]);
-  }, [uploads, viewerMode]);
+  useEffect(() => {
+    window.localStorage.setItem(activeStudentStorageKey, String(activeStudentId));
+  }, [activeStudentId]);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(uploadLinksStorageKey);
-      if (!raw) {
-        return;
-      }
-      const parsed = JSON.parse(raw) as UploadLink[];
-      if (Array.isArray(parsed)) {
-        setUploadLinks(parsed);
-      }
-    } catch (error) {
-      console.error(error);
+    if (!galleryMode && !viewerMode) {
+      return;
     }
-  }, []);
+    window.location.replace(buildHomeHref(activeSubject, activeSubject === "English" ? "english_word_reminder" : "", activeStudentId));
+  }, [activeStudent, activeStudentId, activeSubject, galleryMode, viewerMode]);
 
   useEffect(() => {
-    window.localStorage.setItem(uploadLinksStorageKey, JSON.stringify(uploadLinks));
-  }, [uploadLinks]);
+    async function loadStudents() {
+      setStudentLoading(true);
+      try {
+        const response = await fetch(`${apiBase}/students`);
+        if (!response.ok) throw new Error("load students failed");
+        const data: StudentListResponse = await response.json();
+        const nextStudents = data.items ?? [];
+        setStudents(nextStudents);
+        if (nextStudents.length > 0 && !nextStudents.some((item) => item.id === activeStudentId)) {
+          setActiveStudentId(nextStudents[0].id);
+        }
+      } catch (error) {
+        console.error(error);
+        setMessage("Failed to load students. Please check whether the backend service is running.");
+      } finally {
+        setStudentLoading(false);
+      }
+    }
+
+    void loadStudents();
+  }, [activeStudentId]);
 
   useEffect(() => {
     setActiveQuestionType((current) => {
@@ -993,7 +936,7 @@ export default function App() {
   }, [subjectTags]);
 
   useEffect(() => {
-    if (galleryMode || viewerMode || settingsMode) {
+    if (settingsMode) {
       return;
     }
 
@@ -1003,7 +946,7 @@ export default function App() {
     setImportPreview([]);
     setImportErrors([]);
     setImportStatus(getImportStatusHint(activeSubjectMeta.label));
-  }, [activeSubjectMeta.label, galleryMode, settingsMode, viewerMode]);
+  }, [activeSubjectMeta.label, settingsMode]);
 
   useEffect(() => {
     if (!importModalOpen && !practiceQuestion && !tagQuestion && !essayModalOpen) {
@@ -1056,6 +999,10 @@ export default function App() {
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
+      if (studentMenuCloseTimerRef.current !== null) {
+        window.clearTimeout(studentMenuCloseTimerRef.current);
+        studentMenuCloseTimerRef.current = null;
+      }
       if (essayListSpeechTimerRef.current !== null) {
         window.clearTimeout(essayListSpeechTimerRef.current);
         essayListSpeechTimerRef.current = null;
@@ -1068,11 +1015,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (galleryMode || viewerMode || settingsMode) {
+    if (settingsMode) {
       return;
     }
 
     function handlePopState() {
+      setActiveStudentId(readStudentIdFromLocation());
       const nextSubject = readSubjectFromLocation();
       setActiveSubject(nextSubject);
       setActiveQuestionType(readQuestionTypeFromLocation(nextSubject));
@@ -1086,14 +1034,11 @@ export default function App() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [galleryMode, settingsMode, viewerMode]);
+  }, [settingsMode]);
 
   useEffect(() => {
     function handleDocumentClick(event: MouseEvent) {
       const target = event.target as Node;
-      if (uploadMenuRef.current && !uploadMenuRef.current.contains(target)) {
-        setUploadMenuOpen(false);
-      }
       if (essayListSpeechMenuRef.current && !essayListSpeechMenuRef.current.contains(target)) {
         setEssayListSpeechMenuOpen(false);
       }
@@ -1108,14 +1053,14 @@ export default function App() {
 
   useEffect(() => {
     async function loadQuestions() {
-      if (galleryMode || viewerMode || settingsMode) {
+      if (settingsMode) {
         return;
       }
 
       setLoading(true);
       setMessage("Syncing question list...");
       try {
-        const response = await fetch(`${apiBase}/questions`);
+        const response = await fetch(buildApiUrl("/questions", activeStudentId));
         if (!response.ok) throw new Error("load failed");
         const data = await response.json();
         setItems(data.items ?? []);
@@ -1128,47 +1073,7 @@ export default function App() {
     }
 
     void loadQuestions();
-  }, [galleryMode, settingsMode, viewerMode]);
-
-  useEffect(() => {
-    async function loadUploads() {
-      if (settingsMode) {
-        return;
-      }
-
-      setUploadLoading(true);
-      try {
-        const query = new URLSearchParams({ subject: activeSubject });
-        if (galleryBatchRef.current) {
-          query.set("batch", galleryBatchRef.current);
-        }
-        const response = await fetch(`${apiBase}/uploads?${query.toString()}`);
-        if (!response.ok) throw new Error("upload list failed");
-        const data: UploadListResponse = await response.json();
-        setUploads(data.items ?? []);
-        const historyItems = Array.isArray(data.history) ? data.history : [];
-        if (historyItems.length > 0) {
-          setUploadLinks((current) =>
-            mergeUploadLinks(
-              current,
-              historyItems.map((item) => ({
-                ...item,
-                href: item.href ?? buildGalleryHref(item.subject, item.batchId)
-              }))
-            )
-          );
-        }
-      } catch (error) {
-        console.error(error);
-        setUploads([]);
-        setMessage("Failed to load uploaded images.");
-      } finally {
-        setUploadLoading(false);
-      }
-    }
-
-    void loadUploads();
-  }, [activeSubject, settingsMode]);
+  }, [activeStudentId, settingsMode]);
 
   useEffect(() => {
     async function loadPromptSettings() {
@@ -1180,7 +1085,7 @@ export default function App() {
       setPromptStatus("Loading prompt settings...");
 
       try {
-        const response = await fetch(`${apiBase}/settings/prompt`);
+        const response = await fetch(buildApiUrl("/settings/prompt", activeStudentId));
         if (!response.ok) throw new Error("load prompt settings failed");
 
         const data: PromptSettingsResponse = await response.json();
@@ -1198,7 +1103,7 @@ export default function App() {
     }
 
     void loadPromptSettings();
-  }, [settingsMode]);
+  }, [activeStudentId, settingsMode]);
 
   useEffect(() => {
     if (!settingsMode || savedPromptTemplate === null || promptTemplate === savedPromptTemplate) {
@@ -1210,7 +1115,7 @@ export default function App() {
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch(`${apiBase}/settings/prompt`, {
+          const response = await fetch(buildApiUrl("/settings/prompt", activeStudentId), {
             method: "PUT",
             headers: {
               "Content-Type": "application/json"
@@ -1233,24 +1138,15 @@ export default function App() {
     }, 600);
 
     return () => window.clearTimeout(timer);
-  }, [promptTemplate, savedPromptTemplate, settingsMode]);
+  }, [activeStudentId, promptTemplate, savedPromptTemplate, settingsMode]);
 
   useEffect(() => {
     if (settingsMode) {
       setMessage(promptLoading ? "Loading system settings..." : promptStatus);
       return;
     }
-    if (galleryMode) {
-      setMessage(`${uploads.length} uploaded image(s) in ${activeSubjectMeta.label}`);
-      return;
-    }
-    if (viewerMode) {
-      const viewerCount = viewerGroups.reduce((count, group) => count + group.length, 0);
-      setMessage(`Viewing ${viewerCount} image(s) in ${activeSubjectMeta.label}`);
-      return;
-    }
     setMessage(`${filteredItems.length} question(s) in ${activeSubjectMeta.label}`);
-  }, [activeSubjectMeta.label, filteredItems.length, galleryMode, promptLoading, promptStatus, settingsMode, viewerGroups, viewerMode, uploads.length]);
+  }, [activeSubjectMeta.label, filteredItems.length, promptLoading, promptStatus, settingsMode]);
 
   function switchSubject(subject: string) {
     stopEssayListReading();
@@ -1258,18 +1154,10 @@ export default function App() {
     const nextSubject = getSubjectMeta(subject).value;
     const nextQuestionType = nextSubject === "English" ? "english_word_reminder" : "";
     if (settingsMode) {
-      window.location.href = buildHomeHref(nextSubject, nextQuestionType);
+      window.location.href = buildHomeHref(nextSubject, nextQuestionType, activeStudentId);
       return;
     }
-    if (viewerMode) {
-      window.location.href = buildViewerHref(nextSubject);
-      return;
-    }
-    if (galleryMode) {
-      window.location.href = buildGalleryHref(nextSubject);
-      return;
-    }
-    window.history.pushState({}, "", buildHomeHref(nextSubject, nextQuestionType));
+    window.history.pushState({}, "", buildHomeHref(nextSubject, nextQuestionType, activeStudentId));
     setActiveSubject(nextSubject);
     setActiveQuestionType(nextQuestionType);
     setActiveTag("");
@@ -1284,8 +1172,83 @@ export default function App() {
   function switchQuestionType(questionType: string) {
     stopEssayListReading();
     stopPracticeEssayReading();
-    window.history.pushState({}, "", buildHomeHref(activeSubject, questionType));
+    window.history.pushState({}, "", buildHomeHref(activeSubject, questionType, activeStudentId));
     setActiveQuestionType(questionType);
+  }
+
+  function openStudentMenu() {
+    if (studentMenuCloseTimerRef.current !== null) {
+      window.clearTimeout(studentMenuCloseTimerRef.current);
+      studentMenuCloseTimerRef.current = null;
+    }
+    setStudentMenuOpen(true);
+  }
+
+  function closeStudentMenuWithDelay() {
+    if (studentMenuCloseTimerRef.current !== null) {
+      window.clearTimeout(studentMenuCloseTimerRef.current);
+    }
+    studentMenuCloseTimerRef.current = window.setTimeout(() => {
+      setStudentMenuOpen(false);
+      studentMenuCloseTimerRef.current = null;
+    }, 220);
+  }
+
+  function switchStudent(studentId: number) {
+    if (!studentId || studentId === activeStudentId) {
+      setStudentMenuOpen(false);
+      return;
+    }
+
+    stopEssayListReading();
+    stopPracticeEssayReading();
+    setActiveStudentId(studentId);
+    setEssayModalOpen(false);
+    setImportModalOpen(false);
+    setPracticeQuestion(null);
+    setPracticeResult(null);
+    setTagQuestion(null);
+
+    const params = new URLSearchParams(window.location.search);
+    params.set("studentId", String(studentId));
+    if (!params.get("subject")) {
+      params.set("subject", activeSubject);
+    }
+    const nextSearch = params.toString();
+    window.history.pushState({}, "", `${window.location.pathname}?${nextSearch}`);
+    setStudentMenuOpen(false);
+    setMessage(`Switched to ${students.find((item) => item.id === studentId)?.name ?? `Student ${studentId}`}.`);
+  }
+
+  async function createStudent() {
+    const name = window.prompt("Enter a student name");
+    if (!name || !name.trim()) {
+      return;
+    }
+
+    setStudentCreating(true);
+    try {
+      const response = await fetch(`${apiBase}/students`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ name: name.trim() })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Failed to create the student.");
+      }
+      const created: Student = await response.json();
+      setStudents((current) => [...current, created].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id));
+      setStudentMenuOpen(false);
+      switchStudent(created.id);
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : "Failed to create the student. Please try again later.");
+    } finally {
+      setStudentCreating(false);
+    }
   }
 
   function openImportModal() {
@@ -1783,90 +1746,10 @@ export default function App() {
     setItems((current) => current.map((item) => (item.id === nextQuestion.id ? nextQuestion : item)));
   }
 
-  function openUploadPicker(subject: string) {
-    setPendingUploadSubject(subject);
-    setUploadMenuOpen(false);
-    fileInputRef.current?.click();
-  }
-
-  function toggleUploadMenu(event: ReactMouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
-    setUploadMenuOpen((current) => !current);
-  }
-
-  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    if (!files.length || !pendingUploadSubject) {
-      event.target.value = "";
-      return;
-    }
-    if (files.length > 50) {
-      setMessage("You can upload up to 50 image files at a time.");
-      event.target.value = "";
-      return;
-    }
-
-    setIsUploading(true);
-    const formData = new FormData();
-    files.forEach((file) => formData.append("files", file));
-
-    try {
-      const response = await fetch(`${apiBase}/uploads?subject=${encodeURIComponent(pendingUploadSubject)}`, {
-        method: "POST",
-        body: formData
-      });
-      if (!response.ok) throw new Error("upload failed");
-
-      const data: UploadResponse = await response.json();
-      const uploadedItems = data.items ?? [];
-      if (!uploadedItems.length) throw new Error("empty upload result");
-      const displayItems = data.combinedItems?.length ? data.combinedItems : uploadedItems;
-
-      setUploadLinks((current) => [
-        ...mergeUploadLinks(
-          current,
-          data.history
-            ? [
-                {
-                  ...data.history,
-                  href: data.history.href ?? buildGalleryHref(pendingUploadSubject, data.history.batchId)
-                }
-              ]
-            : [
-                {
-                  id: `${Date.now()}-${uploadedItems[0].name}`,
-                  subject: pendingUploadSubject,
-                  createdAt: uploadedItems[0].createdAt,
-                  href: buildGalleryHref(pendingUploadSubject)
-                }
-              ]
-        )
-      ]);
-
-      if (activeSubject === pendingUploadSubject) {
-        setUploads((current) => [...displayItems, ...current]);
-      }
-
-      setActiveSubject(pendingUploadSubject);
-      setMessage(
-        data.combinedItems?.length
-          ? `${uploadedItems.length} image(s) uploaded to ${getSubjectMeta(pendingUploadSubject).label}, with ${displayItems.length} combined image(s) generated.`
-          : `${uploadedItems.length} image(s) uploaded to ${getSubjectMeta(pendingUploadSubject).label}.`
-      );
-    } catch (error) {
-      console.error(error);
-      setMessage("Image upload failed. Please check the file type, size, or gateway limits.");
-    } finally {
-      setIsUploading(false);
-      setPendingUploadSubject(null);
-      event.target.value = "";
-    }
-  }
-
   async function removeQuestion(id: number) {
     if (!window.confirm("Are you sure you want to delete this question?")) return;
     try {
-      const response = await fetch(`${apiBase}/questions/${id}`, { method: "DELETE" });
+      const response = await fetch(buildApiUrl(`/questions/${id}`, activeStudentId), { method: "DELETE" });
       if (!response.ok) throw new Error("delete failed");
       setItems((current) => current.filter((item) => item.id !== id));
       setMessage("Question deleted.");
@@ -1877,7 +1760,7 @@ export default function App() {
   }
 
   async function reloadQuestions() {
-    const response = await fetch(`${apiBase}/questions`);
+    const response = await fetch(buildApiUrl("/questions", activeStudentId));
     if (!response.ok) throw new Error("load failed");
     const data = await response.json();
     setItems(data.items ?? []);
@@ -1909,7 +1792,7 @@ export default function App() {
 
     setPracticeSubmitting(true);
     try {
-      const response = await fetch(`${apiBase}/questions/${practiceQuestion.id}/attempts`, {
+      const response = await fetch(buildApiUrl(`/questions/${practiceQuestion.id}/attempts`, activeStudentId), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -1956,7 +1839,7 @@ export default function App() {
 
     setPracticeWordStatsLoading(true);
     try {
-      const response = await fetch(`${apiBase}/questions/${practiceQuestion.id}/essay-word-stats`);
+      const response = await fetch(buildApiUrl(`/questions/${practiceQuestion.id}/essay-word-stats`, activeStudentId));
       if (!response.ok) throw new Error("load essay word stats failed");
       const data: EssayWordStatsResponse = await response.json();
       setPracticeWordStats(data.items ?? []);
@@ -1981,7 +1864,7 @@ export default function App() {
       .filter(Boolean);
 
     try {
-      const response = await fetch(`${apiBase}/questions/${tagQuestion.id}/tags`, {
+      const response = await fetch(buildApiUrl(`/questions/${tagQuestion.id}/tags`, activeStudentId), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -2014,7 +1897,7 @@ export default function App() {
     setImportLoading(true);
     setImportStatus("Validating JSON...");
     try {
-      const response = await fetch(`${apiBase}/questions/import/validate`, {
+      const response = await fetch(buildApiUrl("/questions/import/validate", activeStudentId), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2066,7 +1949,7 @@ export default function App() {
     setEssaySaving(true);
     setEssayStatus(editingEssayQuestion ? `Saving ${editorLabel} changes...` : `Saving ${editorLabel}...`);
     try {
-      const response = await fetch(`${apiBase}/questions${editingEssayQuestion ? `/${editingEssayQuestion.id}` : ""}`, {
+      const response = await fetch(buildApiUrl(`/questions${editingEssayQuestion ? `/${editingEssayQuestion.id}` : ""}`, activeStudentId), {
         method: editingEssayQuestion ? "PUT" : "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2110,7 +1993,7 @@ export default function App() {
     setImportLoading(true);
     setImportStatus("Importing into database...");
     try {
-      const response = await fetch(`${apiBase}/questions/import`, {
+      const response = await fetch(buildApiUrl("/questions/import", activeStudentId), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2143,9 +2026,9 @@ export default function App() {
   }
 
   return (
-    <div className={galleryMode || viewerMode ? "page-shell gallery-page" : "page-shell"}>
+    <div className="page-shell">
       <header className="topbar">
-        <a className="brand brand-link" href={buildHomeHref(activeSubject, activeQuestionType)}>
+        <a className="brand brand-link" href={buildHomeHref(activeSubject, activeQuestionType, activeStudentId)}>
           <img className="brand-mark" src="/logo.svg" alt="PSLE logo" />
           <div>
             <strong>PSLE Question Management System</strong>
@@ -2154,96 +2037,78 @@ export default function App() {
         </a>
 
         <div className="topbar-actions">
-          <nav className="subject-nav" aria-label="Subject navigation">
-            {subjectTabs.map((item) =>
-              galleryMode || viewerMode || settingsMode ? (
-                <a
-                  key={item.key}
-                  className={item.value === activeSubject ? "nav-link active nav-anchor" : "nav-link nav-anchor"}
-                  href={
-                    viewerMode
-                      ? buildViewerHref(item.value)
-                      : galleryMode
-                        ? buildGalleryHref(item.value)
-                        : buildHomeHref(item.value, item.value === "English" ? "english_word_reminder" : "")
-                  }
-                >
-                  {item.label}
-                </a>
-              ) : (
+          <div
+            className={studentMenuOpen ? "student-switcher open" : "student-switcher"}
+            tabIndex={0}
+            onMouseEnter={openStudentMenu}
+            onMouseLeave={closeStudentMenuWithDelay}
+            onFocus={openStudentMenu}
+            onBlur={closeStudentMenuWithDelay}
+          >
+            <div className="student-switcher-trigger">
+              <span className="student-switcher-label">Student</span>
+              <span className="student-current">{activeStudent?.name ?? "Default Student"}</span>
+            </div>
+            <div className="student-switcher-menu">
+              {students.map((student) => (
                 <button
-                  key={item.key}
+                  key={student.id}
                   type="button"
-                  className={item.value === activeSubject ? "nav-link active" : "nav-link"}
-                  onClick={() => switchSubject(item.value)}
+                  className={student.id === activeStudentId ? "student-switcher-item active" : "student-switcher-item"}
+                  onClick={() => switchStudent(student.id)}
+                  disabled={studentLoading || studentCreating}
                 >
-                  {item.label}
+                  {student.name}
                 </button>
-              )
-            )}
-          </nav>
+              ))}
+              <button type="button" className="student-action-button" onClick={() => void createStudent()} disabled={studentCreating}>
+                {studentCreating ? "Adding..." : "Add Student"}
+              </button>
+            </div>
+          </div>
 
           <a
             className={settingsMode ? "nav-link active nav-anchor settings-link" : "nav-link nav-anchor settings-link"}
-            href={buildSettingsHref()}
+            href={buildSettingsHref(activeStudentId)}
           >
             Settings
           </a>
-
-          {!settingsMode && (
-            <div ref={uploadMenuRef} className={uploadMenuOpen ? "upload-menu open" : "upload-menu"}>
-              <button type="button" className="upload-trigger" onClick={toggleUploadMenu}>
-                Upload
-              </button>
-              <div className="upload-dropdown">
-                {subjectTabs.map((item) => (
-                  <button key={item.key} type="button" className="upload-option" onClick={() => openUploadPicker(item.value)}>
-                    Upload {item.label} Images
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </header>
-
-      {!settingsMode && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          multiple
-          hidden
-          onChange={handleFileChange}
-        />
-      )}
 
       <div className="page">
         <section className="subject-hero">
           <div>
-            <p className="eyebrow">
-              {settingsMode ? "System Settings" : galleryMode || viewerMode ? `${activeSubjectMeta.label} Gallery` : `${activeSubjectMeta.label} Question Bank`}
-            </p>
+            {!settingsMode && (
+              <div className="subject-toolbar">
+                <span className="subject-toolbar-label">Subjects</span>
+                <nav className="subject-nav subject-nav-panel" aria-label="Subject navigation">
+                  {subjectTabs.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className={item.value === activeSubject ? "nav-link active" : "nav-link"}
+                      onClick={() => switchSubject(item.value)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            )}
+
+            <p className="eyebrow">{settingsMode ? "System Settings" : `${activeSubjectMeta.label} Question Bank`}</p>
             <h1>
               {settingsMode
                 ? "Prompt Settings"
-                : viewerMode
-                  ? `${activeSubjectMeta.label} Image Viewer`
-                  : galleryMode
-                    ? `${activeSubjectMeta.label} Combined Images`
-                    : `${activeSubjectMeta.label} Question List`}
+                : `${activeSubjectMeta.label} Question List`}
             </h1>
             <p className="hero-text">
               {settingsMode
                 ? "Manage system-level prompt settings here. Updates are auto-saved to the database for reuse by future features."
-                : viewerMode
-                  ? viewerGroups.reduce((count, group) => count + group.length, 0) > 10
-                    ? "Images are displayed in pairs so each group can fill one screen as cleanly as possible for continuous viewing."
-                    : "Only the selected image or combined image is shown here, scaled to fit the screen while keeping the full content visible."
-                  : galleryMode
-                    ? "This page shows combined long images for the current subject. If no combined image exists yet, the original uploads are shown."
-                    : "Use the top-right menu to upload images. You can also import JSON for the current subject and continue filtering by question type here."}
+                : "Import JSON for the current subject and continue filtering by question type here."}
             </p>
+            <p className="hero-student">Current student: {activeStudent?.name ?? "Default Student"}</p>
           </div>
           <div className="hero-card">
             <span>Data Status</span>
@@ -2256,9 +2121,7 @@ export default function App() {
                     : "Ready"
                 : importLoading
                   ? "Processing"
-                : isUploading
-                  ? "Uploading"
-                  : loading || uploadLoading
+                  : loading
                   ? "Syncing"
                   : "Ready"}
             </strong>
@@ -2298,48 +2161,6 @@ export default function App() {
               </div>
             </section>
           </main>
-        ) : viewerMode ? (
-          <section className="panel viewer-page-panel">
-            {uploadLoading ? (
-              <p className="empty-copy">Loading images...</p>
-            ) : viewerGroups.length ? (
-              <div className="viewer-groups">
-                {viewerGroups.map((group, groupIndex) => (
-                  <section
-                    key={`${group[0].url}-${groupIndex}`}
-                    id={`viewer-group-${groupIndex}`}
-                    className={group.length === 1 ? "viewer-group single" : "viewer-group"}
-                  >
-                    {group.map((item) => (
-                      <a key={item.url} className="viewer-image-card" href={item.url} target="_blank" rel="noreferrer">
-                        <img src={item.url} alt={item.name} loading="lazy" />
-                        <div className="viewer-image-meta">{formatDateTime(item.createdAt)}</div>
-                      </a>
-                    ))}
-                  </section>
-                ))}
-              </div>
-            ) : (
-              <p className="empty-copy">No uploaded images for this subject yet.</p>
-            )}
-          </section>
-        ) : galleryMode ? (
-          <section className="panel gallery-page-panel">
-            {uploadLoading ? (
-              <p className="empty-copy">Loading images...</p>
-            ) : uploads.length ? (
-              <div className="gallery-long-list">
-                {uploads.map((item) => (
-                  <a key={item.url} className="gallery-long-card" href={item.url} target="_blank" rel="noreferrer">
-                    <img src={item.url} alt={item.name} loading="lazy" />
-                    <div className="gallery-long-meta">{formatDateTime(item.createdAt)}</div>
-                  </a>
-                ))}
-              </div>
-            ) : (
-              <p className="empty-copy">No uploaded images for this subject yet.</p>
-            )}
-          </section>
         ) : (
           <main className="content-layout">
             <section className="panel question-panel">
