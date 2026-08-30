@@ -909,6 +909,29 @@ th {
   color: #475569;
 }
 
+.practice-tag-shortcut {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+.practice-tag-shortcut:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.practice-tag-shortcut.added {
+  color: #15803d;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.practice-shortcut-hint {
+  margin: -4px 0 14px;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .practice-stem {
   padding: 14px;
   border-radius: 14px;

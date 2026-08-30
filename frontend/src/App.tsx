@@ -131,6 +131,7 @@ const questionTypeLabels: Record<string, string> = {
 
 const essaySpeechRateOptions = [1, 1.25, 1.5] as const;
 const essaySpeechVoiceOptions = ["male", "female"] as const;
+const practiceMoreTag = "practise more";
 type EssaySpeechVoice = (typeof essaySpeechVoiceOptions)[number];
 
 function getSubjectMeta(subject: string) {
@@ -791,6 +792,7 @@ export default function App() {
   const [tagQuestion, setTagQuestion] = useState<Question | null>(null);
   const [tagDraft, setTagDraft] = useState("");
   const [tagSaving, setTagSaving] = useState(false);
+  const [practiceTagSaving, setPracticeTagSaving] = useState(false);
 
   const essayListSpeechMenuRef = useRef<HTMLDivElement | null>(null);
   const practiceSpeechMenuRef = useRef<HTMLDivElement | null>(null);
@@ -966,6 +968,43 @@ export default function App() {
     document.addEventListener("keydown", handleModalKeydown);
     return () => document.removeEventListener("keydown", handleModalKeydown);
   }, [essayModalOpen, importModalOpen, practiceQuestion, tagQuestion]);
+
+  useEffect(() => {
+    if (!practiceQuestion || importModalOpen || essayModalOpen || tagQuestion) {
+      return;
+    }
+    const activePracticeQuestion = practiceQuestion;
+
+    function handlePracticeShortcut(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (event.key === "Enter") {
+        if (isEnglishCommonSentenceQuestion(activePracticeQuestion.questionType) || target?.closest("button, a, select")) {
+          return;
+        }
+        event.preventDefault();
+        void submitPracticeAnswer();
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        navigatePracticeQuestion("previous");
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        navigatePracticeQuestion("next");
+      }
+    }
+
+    document.addEventListener("keydown", handlePracticeShortcut);
+    return () => document.removeEventListener("keydown", handlePracticeShortcut);
+  }, [essayModalOpen, importModalOpen, practiceQuestion, tagQuestion, practiceAnswer, essayBlankAnswers, practiceSubmitting, wordReminderPassed]);
 
   useEffect(() => {
     if (!essayModalOpen || !essayStemRef.current) {
@@ -1430,39 +1469,27 @@ export default function App() {
 
   function openPracticeModal(question: Question) {
     stopEssayListReading();
-    stopPracticeEssayReading();
-    setPracticeQuestion(question);
-    setPracticeAnswer("");
-    setEssayBlankAnswers([]);
-    setEssayBlankHintVisible([]);
-    setPracticeResult(null);
-    setPracticeHintVisible(false);
-    setPracticeAnswerVisible(false);
-    setPracticeEssayReading(false);
-    setPracticeWordStatsVisible(false);
-    setPracticeWordStats([]);
+    resetPracticeState(question);
   }
 
   function closePracticeModal() {
-    stopPracticeEssayReading();
-    setPracticeQuestion(null);
-    setPracticeAnswer("");
-    setEssayBlankAnswers([]);
-    setEssayBlankHintVisible([]);
-    setPracticeResult(null);
-    setPracticeHintVisible(false);
-    setPracticeAnswerVisible(false);
-    setPracticeWordStatsVisible(false);
-    setPracticeWordStats([]);
+    resetPracticeState(null);
   }
 
   function navigatePracticeQuestion(direction: "previous" | "next") {
+    if (practiceSubmitting || (practiceQuestion && isEnglishWordReminderQuestion(practiceQuestion.questionType) && !wordReminderPassed)) {
+      return;
+    }
     const target = direction === "previous" ? previousPracticeQuestion : nextPracticeQuestion;
     if (!target) {
       return;
     }
+    resetPracticeState(target);
+  }
+
+  function resetPracticeState(nextQuestion: Question | null) {
     stopPracticeEssayReading();
-    setPracticeQuestion(target);
+    setPracticeQuestion(nextQuestion);
     setPracticeAnswer("");
     setEssayBlankAnswers([]);
     setEssayBlankHintVisible([]);
@@ -1746,6 +1773,12 @@ export default function App() {
     setItems((current) => current.map((item) => (item.id === nextQuestion.id ? nextQuestion : item)));
   }
 
+  function syncUpdatedQuestion(nextQuestion: Question) {
+    replaceQuestion(nextQuestion);
+    setPracticeQuestion((current) => (current?.id === nextQuestion.id ? nextQuestion : current));
+    setTagQuestion((current) => (current?.id === nextQuestion.id ? nextQuestion : current));
+  }
+
   async function removeQuestion(id: number) {
     if (!window.confirm("Are you sure you want to delete this question?")) return;
     try {
@@ -1864,25 +1897,56 @@ export default function App() {
       .filter(Boolean);
 
     try {
-      const response = await fetch(buildApiUrl(`/questions/${tagQuestion.id}/tags`, activeStudentId), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ tags })
-      });
-      if (!response.ok) throw new Error("save tags failed");
-
-      const data: UpdateTagsResponse = await response.json();
-      replaceQuestion(data);
-      setTagQuestion(data);
-      setTagDraft((data.tags ?? []).join(", "));
-      setMessage(`Tags updated for ${data.title}.`);
+      await updateQuestionTags(tagQuestion, tags);
     } catch (error) {
       console.error(error);
       setMessage("Failed to save tags. Please try again later.");
     } finally {
       setTagSaving(false);
+    }
+  }
+
+  async function updateQuestionTags(question: Question, tags: string[]) {
+    const response = await fetch(buildApiUrl(`/questions/${question.id}/tags`, activeStudentId), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ tags })
+    });
+    if (!response.ok) throw new Error("save tags failed");
+
+    const data: UpdateTagsResponse = await response.json();
+    syncUpdatedQuestion(data);
+    setTagDraft((data.tags ?? []).join(", "));
+    setMessage(`Tags updated for ${data.title}.`);
+    return data;
+  }
+
+  async function addPracticeQuickTag(tag: string) {
+    if (!practiceQuestion) {
+      return;
+    }
+
+    const nextTag = tag.trim();
+    if (!nextTag) {
+      return;
+    }
+
+    const nextTags = Array.from(new Set([...(practiceQuestion.tags ?? []), nextTag]));
+    if (nextTags.length === (practiceQuestion.tags ?? []).length) {
+      setMessage(`Tag "${nextTag}" is already on ${practiceQuestion.title}.`);
+      return;
+    }
+
+    setPracticeTagSaving(true);
+    try {
+      await updateQuestionTags(practiceQuestion, nextTags);
+    } catch (error) {
+      console.error(error);
+      setMessage("Failed to add the tag. Please try again later.");
+    } finally {
+      setPracticeTagSaving(false);
     }
   }
 
@@ -2601,7 +2665,20 @@ export default function App() {
                         {tag}
                       </span>
                     ))}
+                    <button
+                      type="button"
+                      className={(practiceQuestion.tags ?? []).includes(practiceMoreTag) ? "link practice-tag-shortcut added" : "link practice-tag-shortcut"}
+                      onClick={() => void addPracticeQuickTag(practiceMoreTag)}
+                      disabled={practiceTagSaving}
+                    >
+                      {(practiceQuestion.tags ?? []).includes(practiceMoreTag) ? "practise more added" : "practise more"}
+                    </button>
+                    <button type="button" className="link practice-tag-shortcut" onClick={() => openTagModal(practiceQuestion)}>
+                      Manage Tags
+                    </button>
                   </div>
+
+                  <p className="practice-shortcut-hint">Shortcuts: `Enter` submit, `←` previous, `→` next.</p>
 
                   {isEnglishReadingQuestion(practiceQuestion.questionType) ? (
                     <div className={isEnglishBlankPassageQuestion(practiceQuestion.questionType) ? "practice-essay-layout" : "practice-reading-layout"}>
